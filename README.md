@@ -101,12 +101,40 @@ If you used the CARLA2Real tool or any dataset from this repository in a scienti
   keywords={Translation;Synthetic data;Visualization;Training;Feature extraction;Engines;Autonomous vehicles;Semantic segmentation;Photorealism;Games;Sim2real gap;CARLA simulator;computer vision;image processing;autonomous driving},
   doi={10.1109/TITS.2025.3597010}}
 
-@Article{Richter_2021,
-                    title = {Enhancing Photorealism Enhancement},
-                    author = {Stephan R. Richter and Hassan Abu AlHaija and Vladlen Koltun},
-                    journal= {arXiv:2105.04619},
-                    year = {2021},
-                }
+@ARTICLE{9756256,
+  author={Richter, Stephan R. and Alhaija, Hassan Abu and Koltun, Vladlen},
+  journal={IEEE Transactions on Pattern Analysis and Machine Intelligence}, 
+  title={Enhancing Photorealism Enhancement}, 
+  year={2023},
+  volume={45},
+  number={2},
+  pages={1700-1715},
+  keywords={Photorealism;Training;Semantics;Rendering (computer graphics);Games;Image segmentation;Pipelines;Photorealism enhancement;photorealism;image-to-image translation;style transfer},
+  doi={10.1109/TPAMI.2022.3166687}}
+```
+For the REGEN and HyPER-GAN models that are also supported in CARLA2Real, use the following citations:
+
+```
+@ARTICLE{11373202,
+  author={Pasios, Stefanos and Nikolaidis, Nikos},
+  journal={IEEE Transactions on Games}, 
+  title={REGEN: Real-Time Photorealism Enhancement in Games Via a Dual-Stage Generative Network Framework}, 
+  year={2026},
+  volume={},
+  number={},
+  pages={1-8},
+  keywords={Games;Translation;Photorealism;Visualization;Semantics;Video games;Real-time systems;Training;Engines;Rendering (computer graphics);Computer vision;image-to-image translation;photorealism enhancement;unreal engine},
+  doi={10.1109/TG.2026.3661622}}
+
+@misc{pasios2026hyperganhybridpatchbasedimagetoimage,
+      title={HyPER-GAN: Hybrid Patch-Based Image-to-Image Translation for Real-Time Photorealism Enhancement}, 
+      author={Stefanos Pasios and Nikos Nikolaidis},
+      year={2026},
+      eprint={2603.10604},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2603.10604}, 
+}
 ```
 
 # Installitation/Requirements
