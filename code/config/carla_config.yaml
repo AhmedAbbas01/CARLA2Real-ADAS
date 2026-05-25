@@ -19,7 +19,7 @@ carla_world_settings:
 
 dataset_settings: #Generating a synthetic Dataset settings.
   export_dataset: False #Generate or not a dataset (available only in synchronous mode).
-  dataset_path: E:/ #The path of a disk for the dataset to be saved.
+  dataset_path: K:/ #The path of a disk for the dataset to be saved.
   images_format: png #png or jpg
   capture_when_static: False #Capture frames or not when the vehicle is not moving.
   speed_threshold: 0.1 #Capture frames or not if a vehicle is moving below a speed threshold.
@@ -104,3 +104,10 @@ REGEN_settings: #change these settings only if you trained custom REGEN models w
 
 HYPERGAN_settings: #change these settings only if you trained custom REGEN models with different parameters
   checkpoint_name: "gta2cs.pth" #change with the checkpoint name (not the entire path)
+
+HybridSim2Real:
+  prompt: "Ultra-photorealistic cinematic recreation of the input image. Preserve the exact composition, camera angle, framing, perspective, scale, and spatial placement of every object — no additions, removals, or repositioning. Replace any CGI/game aesthetics with real-world materials featuring physically accurate textures (micro-details, imperfections, wear, fingerprints, surface variation). Use physically based rendering with correct light transport, global illumination, realistic reflections, refractions, and contact shadows. Natural color grading, high dynamic range, true-to-life skin tones (if applicable), and accurate material response (metal, glass, fabric, skin, etc.). Shot as if captured with a high-end cinema camera: shallow depth of field where appropriate, natural lens characteristics, subtle film grain, and cinematic lighting. No stylization, no painterly effects, no artificial smoothing, no geometry changes — pure real-world realism. "
+  hf_token: mytoken #your token for accessing FLUX.2-4B Klein
+  flux_model: "black-forest-labs/FLUX.2-klein-4B"
+  image_height: #force a specific image resolution, leave empty to get the same resolution as the input image
+  image_width: 
