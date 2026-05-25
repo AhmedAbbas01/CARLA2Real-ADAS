@@ -15,11 +15,14 @@
 <img alt="Static Badge" src="https://img.shields.io/badge/DATASET-cyan?style=for-the-badge&logo=kaggle&logoSize=auto">
   </a>
       <a href="https://github.com/stefanos50/REGEN" target="_blank">
-<img alt="Static Badge" src="https://img.shields.io/badge/REGEN_Project-black?style=for-the-badge&logo=github&logoSize=auto">
+<img alt="Static Badge" src="https://img.shields.io/badge/REGEN-black?style=for-the-badge&logo=github&logoSize=auto">
   </a>
     </a>
       <a href="https://github.com/stefanos50/HyPER-GAN" target="_blank">
-<img alt="Static Badge" src="https://img.shields.io/badge/HyPERGAN_Project-black?style=for-the-badge&logo=github&logoSize=auto">
+<img alt="Static Badge" src="https://img.shields.io/badge/HyPERGAN-black?style=for-the-badge&logo=github&logoSize=auto">
+  </a>
+  <a href="https://github.com/stefanos50/Hybrid-Sim2Real" target="_blank">
+<img alt="Static Badge" src="https://img.shields.io/badge/HybridSim2Real-black?style=for-the-badge&logo=github&logoSize=auto">
   </a>
 </div>
 
@@ -116,7 +119,7 @@ If you used the CARLA2Real tool or any dataset from this repository in a scienti
   keywords={Photorealism;Training;Semantics;Rendering (computer graphics);Games;Image segmentation;Pipelines;Photorealism enhancement;photorealism;image-to-image translation;style transfer},
   doi={10.1109/TPAMI.2022.3166687}}
 ```
-For the REGEN and HyPER-GAN models that are also supported in CARLA2Real, use the following citations:
+For the REGEN, HyPER-GAN, Hybrid-Sim2Real methods that are also supported in CARLA2Real, use the following citations:
 
 ```
 @ARTICLE{11373202,
@@ -138,6 +141,16 @@ For the REGEN and HyPER-GAN models that are also supported in CARLA2Real, use th
       archivePrefix={arXiv},
       primaryClass={cs.CV},
       url={https://arxiv.org/abs/2603.10604}, 
+}
+
+@misc{pasios2026hybridapproachclosingsim2real,
+      title={A Hybrid Approach for Closing the Sim2real Appearance Gap in Game Engine Synthetic Datasets}, 
+      author={Stefanos Pasios},
+      year={2026},
+      eprint={2605.02291},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2605.02291}, 
 }
 ```
 
@@ -294,6 +307,29 @@ Currently, REGEN and HyPER-GAN are supported only with PyTorch, and therefore ch
 To train REGEN or HyPER-GAN models towards the characteristics of different datasets, please visit the official repositories ([REGEN](https://github.com/stefanos50/REGEN), [HyPER-GAN](https://github.com/stefanos50/HyPER-GAN)).
 
 > 📝 Note: It is still required to install an EPE pretrained model in order to use REGEN or HyPER-GAN methods. However, the EPE weights will be unloaded from the GPU if REGEN or HyPER-GAN is selected.
+
+# Hybrid-Sim2Real
+
+CARLA2Real now supports the enhancement of synthetic data that were extracted with the integraded data generation functionality using the Hybrid-Sim2Real method. 
+
+To use Hybrid-Sim2Real, first generate a synthetic dataset by enabling the data extraction functionality and, more specifically, the `export_dataset` parameter inside `\code\config\carla_config.yaml`. Subsequently, visit the official [FLUX.2-4B Klein](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) Hugging Face repository and generate an HF access token. Inside `\code\config\carla_config.yaml` set the `hf_token` parameter with the HF access token and select either REGEN or HyPER-GAN as the method by updating the `method` parameter (the `checkpoint_name` should also be updated after downloading the models inside the `checkpoints/REGEN` or `checkpoints/HYPERGAN` directories). Finally, execute the following commands:
+
+```javascript
+
+cd <path-to>/HybridSim2Real/
+
+python enhancer.py
+
+```
+
+The results will be saved in the `HybridSim2Real` directory inside the dataset path specified in `dataset_path` inside `\code\config\carla_config.yaml`.
+
+Below is an example of YOLO26-SEG trained on the real-world KITTI dataset and the combination of the real-world KITTI and the photorealism-enhanced (by Hybrid-Sim2Real) VKITTI2 dataset.
+
+https://github.com/user-attachments/assets/7615c9eb-5dd1-4c33-ad90-f0c259441270
+
+
+> 📝 Note: For enhancing the photorealism of unrealated with CARLA datasets, visit Hybrid-Sim2Real [repository](https://github.com/stefanos50/Hybrid-Sim2Real).
 
 # Experimenting
 For experimenting with our code, we provide a `carla_config` file containing most of the parameters, along with a number of Python samples. In the next chapters, we will present some of the basic functionalities. More in-depth information for each parameter or function can be found via comments in the `code` or next to each parameter inside the `yaml` files.
