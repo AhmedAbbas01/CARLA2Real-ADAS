@@ -326,7 +326,9 @@ The results will be saved in the `HybridSim2Real` directory inside the dataset p
 
 Below is an example of YOLO26-SEG trained on the real-world KITTI dataset and the combination of the real-world KITTI and the photorealism-enhanced (by Hybrid-Sim2Real) VKITTI2 dataset.
 
-<video src="https://github.com/user-attachments/assets/7615c9eb-5dd1-4c33-ad90-f0c259441270" width="400" controls></video>
+
+https://github.com/user-attachments/assets/8d141464-ba86-4361-be7e-bc1a1249d516
+
 
 > 📝 Note: For enhancing the photorealism of unrealated with CARLA datasets, visit Hybrid-Sim2Real [repository](https://github.com/stefanos50/Hybrid-Sim2Real).
 
