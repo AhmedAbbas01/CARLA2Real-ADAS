@@ -324,7 +324,7 @@ python enhancer.py
 
 The results will be saved in the `HybridSim2Real` directory inside the dataset path specified in `dataset_path` inside `\code\config\carla_config.yaml`.
 
-Below is an example of YOLO26-SEG trained on the real-world KITTI dataset and the combination of the real-world KITTI and the photorealism-enhanced (by Hybrid-Sim2Real) VKITTI2 dataset.
+Below is an example of YOLO26-SEG trained (without employing the pretrained weights) on the real-world KITTI dataset and the combination of the real-world KITTI and the photorealism-enhanced (by Hybrid-Sim2Real) VKITTI2 dataset.
 
 
 https://github.com/user-attachments/assets/8d141464-ba86-4361-be7e-bc1a1249d516
