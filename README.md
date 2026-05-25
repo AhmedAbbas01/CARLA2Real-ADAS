@@ -33,11 +33,14 @@ This project originated as part of a Master's Thesis within the "Digital Media -
 
 ### Diffusion Models
 
-Below is a real-time demo (RTX 4070S) of REGEN trained to translate CARLA towards the output of FLUX.2-klein-4B. Due to the more frequent inconsistencies of diffusion models (e.g., changing the color of the vehicles) compared to image-to-image translation, there are more frequent instances of temporal instability (e.g., flickering) compared to traditional image-to-image translation methods. However, these issues can be mitigated by leveraging more advanced, paid diffusion-based models, such as ChatGPT Image or Qwen Image 2.0.
+Below is a real-time demo (RTX 4070S) of REGEN trained to translate CARLA towards the output of [FLUX.2-klein-4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B). Due to the more frequent inconsistencies of diffusion models (e.g., changing the color of the vehicles) compared to image-to-image translation, there are more frequent instances of temporal instability (e.g., flickering) compared to traditional image-to-image translation methods. However, these issues can be mitigated by leveraging more advanced, paid diffusion-based models, such as ChatGPT Image or Qwen Image 2.0.
 
 
 https://github.com/user-attachments/assets/4b440fdc-43a0-4b4e-b780-36c65a621aca
 
+CARLA2Real now also supports the photorealism enhancement of the synthetic data using [Hybrid-Sim2Real](https://arxiv.org/abs/2605.02291), which combines the strong geometry and material updates of diffusion models (i.e., FLUX.2-klein-4B) with the data distribution alignment of image-to-image translation methods (i.e., REGEN and HyPER-GAN). Below is an example of an image from the VKITTI dataset translated with Hybrid-Sim2Real towards the real-world KITTI dataset.
+
+<img width="1000" height="214" alt="vkitti_sample" src="https://github.com/user-attachments/assets/b4eb04af-fe97-4ac2-85f0-0faf1e14bb6a" />
 
 ### Extending the models to other domains
 
@@ -46,6 +49,7 @@ Except for autonomous driving simulation scenarios, the pretrained models includ
 
 ### Updates
 
+* **25/05/2026**: Added code for [Hybrid-Sim2Real](https://arxiv.org/abs/2605.02291) that further improves photorealism for frame-level algorithms (e.g., semantic segmentation).
 * **22/03/2026**: Added REGEN model trained on the output of FLUX.2-klein-4B.
 * **16/03/2026**: Integrated [HyPER-GAN method](https://arxiv.org/abs/2603.10604), which can achieve 30 FPS at 1080p with an RTX 4070 Super GPU.
 * **16/12/2025**: Integrated [REGEN method](https://arxiv.org/abs/2508.17061) (Cityscapes, KITTI, and nuScenes) as an option for faster inference (see the documentation below).
