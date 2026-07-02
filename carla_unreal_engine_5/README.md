@@ -45,8 +45,9 @@ python3 test.py --model_onnx ~/Downloads/carla2cityscapes-360000.onnx --dataset_
 You can then visualize the collected data on top of the enhanced images. Open a new terminal into the project and run the following command:
 
 ```bash
-conda activate carla
+conda deactivate && conda deactivate
+source /opt/pytorch/bin/activate
 cd ~/workset/CARLA2Real-ADAS/carla_unreal_engine_5
-python3 visualize_bbox.py --frames_dir $PWD/../Dataset/EnhancedPhotos --bboxes_dir $PWD/../Dataset/BoundingBoxes/ --output_dir $PWD/../Dataset/VisulOutput/
+python3 visualize_bboxes.py --frames_dir $PWD/../Dataset/EnhancedPhotos --bboxes_dir $PWD/../Dataset/BoundingBoxes/ --output_dir $PWD/../Dataset/VisulOutput/
 ```
 The script saves the images into the output folder that contains the bounding boxes on top of the enhanced images and titled with object type, showing the object distances as well.

@@ -15,14 +15,14 @@ def main():
     
     os.makedirs(args.output_dir, exist_ok=True)
     
-    frames = [f for f in os.listdir(args.frames_dir) if f.endswith('.png') and os.path.splitext(f)[0].isdigit()]
+    frames = [f for f in os.listdir(args.frames_dir) if f.endswith('.png')]
     
     if not frames:
         print(f"No frames found in {args.frames_dir}")
         return
 
     for frame_name in frames:
-        frame_counter = os.path.splitext(frame_name)[0]
+        frame_counter = os.path.splitext(frame_name)[0].split('-')[-1]
         
         frame_path = os.path.join(args.frames_dir, frame_name)
         bbox_name = f"bboxes_{frame_counter}.json"
