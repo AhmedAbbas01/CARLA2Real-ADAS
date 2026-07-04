@@ -28,10 +28,12 @@ def validate_arguments(args):
         print('--dataset_directory argument is not set. Please provide a valid path in the disk where the dataset is stored.')
         exit(1)
 
-    if (args.out_path is None) or not os.path.isdir(args.out_path):
+    if (args.out_path is None):
         print('--out_path argument is not set. Please provide a valid path.')
         exit(1)
-
+    elif not os.path.exists(args.out_path):
+        os.makedirs(args.out_path)
+        print(f"Created output directory: {args.out_path}")
     if (args.model_onnx is None) or not os.path.isfile(args.model_onnx):
         print('--model_onnx argument is not set. Please provide a valid path of the trained model.')
         exit(1)
