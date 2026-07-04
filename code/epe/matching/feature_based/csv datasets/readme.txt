@@ -1,1 +1,0 @@
-Here, you can place the CSV and NPZ files generated from the patch-matching procedure.
