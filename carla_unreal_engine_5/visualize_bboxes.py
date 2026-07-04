@@ -46,20 +46,26 @@ def main():
             bbox = obj.get('bbox', [0, 0, 0, 0])
             
             x_min, y_min, x_max, y_max = map(int, bbox)
+            type_label = obj_type.split('.')[-1] if isinstance(obj_type, str) else str(obj_type)
             
             # Pick a color based on the object type (BGR format)
-            if 'vehicle' in obj_type:
+            if type_label in {"Car", "Truck", "Bus", "Motorcycle", "Bicycle", "Train"}:
                 color = (0, 255, 0) # Green
-            elif 'pedestrian' in obj_type:
+            elif type_label in {"Rider", "Pedestrian"}:
                 color = (0, 0, 255) # Red
-            elif 'traffic' in obj_type:
+            elif type_label in {"TrafficSigns"}:
                 color = (0, 255, 255) # Yellow
-            else:
+            elif type_label in {"TrafficLight"}:
+                color = (255, 0, 255) # Magenta
+            elif type_label in {"RailTrack"}:
                 color = (255, 255, 255) # White
+            else:
+                color = (255, 0, 0) # Blue
                 
             cv2.rectangle(img, (x_min, y_min), (x_max, y_max), color, 2)
             
-            label = f"{obj_type.split('.')[0]} ({dist:.1f}m)"
+            label = f"{type_label} ({dist:.1f}m)"
+            print(f"Drawing bbox for {obj_type} at distance {dist:.1f}m")
             cv2.putText(img, label, (x_min, max(y_min - 5, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
             
         output_path = os.path.join(args.output_dir, f"visualized_{frame_name}")

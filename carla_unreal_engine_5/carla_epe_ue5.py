@@ -213,26 +213,10 @@ def get_bounding_boxes(world, camera, K, bbox_distance_range=(0.1, 50.0)):
     c2w = np.array(camera_transform.get_matrix())
     w2c = np.linalg.inv(c2w)
     
-    actors = world.get_actors()
-    vehicles = actors.filter('vehicle.*')
-    walkers = actors.filter('walker.pedestrian.*')
-    traffic_signs = actors.filter('traffic.traffic_sign.*')
-    traffic_lights = actors.filter('traffic.traffic_light.*')
-    
-    all_objects = list(vehicles) + list(walkers) + list(traffic_signs) + list(traffic_lights)
-    
-    for obj in all_objects:
-        dist = obj.get_transform().location.distance(camera_transform.location)
-        
-        if dist > max_distance or dist < min_distance:
-            continue
-            
-        if not hasattr(obj, 'bounding_box') or obj.bounding_box is None:
-            continue
+    image_w = K[0, 2] * 2
+    image_h = K[1, 2] * 2
 
-        bb = obj.bounding_box
-        verts = bb.get_world_vertices(obj.get_transform())
-        
+    def project_verts_to_bbox(verts):
         verts_camera = []
         for v in verts:
             p_world = np.array([v.x, v.y, v.z, 1.0])
@@ -240,7 +224,7 @@ def get_bounding_boxes(world, camera, K, bbox_distance_range=(0.1, 50.0)):
             verts_camera.append(p_camera)
             
         if any(p[0] <= 0 for p in verts_camera):
-            continue
+            return None
             
         verts_2d = []
         for p_camera in verts_camera:
@@ -258,24 +242,61 @@ def get_bounding_boxes(world, camera, K, bbox_distance_range=(0.1, 50.0)):
         y_min = np.min(verts_2d[:, 1])
         y_max = np.max(verts_2d[:, 1])
         
-        image_w = K[0, 2] * 2
-        image_h = K[1, 2] * 2
-        
         x_min = max(0.0, min(x_min, image_w))
         x_max = max(0.0, min(x_max, image_w))
         y_min = max(0.0, min(y_min, image_h))
         y_max = max(0.0, min(y_max, image_h))
 
         if x_min >= x_max or y_min >= y_max:
-            continue
+            return None
             
-        bounding_boxes.append({
-            "type": obj.type_id,
-            "id": obj.id,
-            "distance": float(dist),
-            "bbox": [float(x_min), float(y_min), float(x_max), float(y_max)]
-        })
+        return [float(x_min), float(y_min), float(x_max), float(y_max)]
+
+    # 2. Process Objects by type
+    labels = [
+        carla.CityObjectLabel.Car,
+        carla.CityObjectLabel.Truck,
+        carla.CityObjectLabel.Bus,
+        carla.CityObjectLabel.Motorcycle,
+        carla.CityObjectLabel.Bicycle,
+        carla.CityObjectLabel.Rider,
+        carla.CityObjectLabel.Train,
+        carla.CityObjectLabel.RailTrack,
+        carla.CityObjectLabel.TrafficSigns,
+        carla.CityObjectLabel.TrafficLight,
+    ]
+    
+    rendered_centers = set()
+    
+    for label_index, label in enumerate(labels):
+        try:
+            level_bbs = world.get_level_bbs(label)
+        except Exception:
+            level_bbs = []
             
+        for bb in level_bbs:
+            dist = bb.location.distance(camera_transform.location)
+            if dist > max_distance or dist < min_distance:
+                continue
+                
+            center = (round(bb.location.x, 1), round(bb.location.y, 1), round(bb.location.z, 1))
+            if center in rendered_centers:
+                continue
+            rendered_centers.add(center)
+            
+            verts = bb.get_world_vertices(carla.Transform())
+            bbox_2d = project_verts_to_bbox(verts)
+            
+            if bbox_2d:
+                type_name = f"{label.name}" if hasattr(label, 'name') else f"{str(label)}"
+                obj_id = 1000+label_index
+                bounding_boxes.append({
+                    "type": type_name,
+                    "id": obj_id,
+                    "distance": float(dist),
+                    "bbox": bbox_2d
+                })
+
     return bounding_boxes
     
 def run_simulation(world, vehicle, camera, args, frame_counter=0):
