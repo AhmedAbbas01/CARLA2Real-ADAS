@@ -24,6 +24,14 @@ def parse_args():
     parser.add_argument("--export_step", type=int, default=60, help="Step size between frame exports.")
     parser.add_argument("--num_vehicles", type=int, default=100, help="Number of vehicles to spawn.")
     parser.add_argument("--num_walkers", type=int, default=40, help="Number of pedestrians to spawn.")
+    parser.add_argument(
+        "--bbox_distance_range",
+        nargs=2,
+        type=float,
+        default=[0.1, 50.0],
+        metavar=("MIN", "MAX"),
+        help="Minimum and maximum allowed distance in meters for bounding boxes.",
+    )
     return parser.parse_args()
 
 def remove_file_if_exists(file_path):
@@ -176,6 +184,11 @@ def setup_carla(width, height, num_vehicles, num_walkers):
             sys.exit(1)
 
         vehicle.set_autopilot(True)
+        traffic_manager = client.get_trafficmanager(8000)
+        # Forces lane changes
+        traffic_manager.auto_lane_change(vehicle, True)
+        # Ignores traffic lights 100% of the time
+        traffic_manager.ignore_lights_percentage(vehicle, 100)
 
         vehicles_id, all_id = spawn_traffic(client, world, num_vehicles, num_walkers)
 
@@ -192,8 +205,9 @@ def setup_carla(width, height, num_vehicles, num_walkers):
         print(f"Error setting up CARLA: {e}")
         sys.exit(1)
 
-def get_bounding_boxes(world, camera, K):
+def get_bounding_boxes(world, camera, K, bbox_distance_range=(0.1, 50.0)):
     bounding_boxes = []
+    min_distance, max_distance = bbox_distance_range
     
     camera_transform = camera.get_transform()
     c2w = np.array(camera_transform.get_matrix())
@@ -210,7 +224,7 @@ def get_bounding_boxes(world, camera, K):
     for obj in all_objects:
         dist = obj.get_transform().location.distance(camera_transform.location)
         
-        if dist > 50 or dist < 0.1:
+        if dist > max_distance or dist < min_distance:
             continue
             
         if not hasattr(obj, 'bounding_box') or obj.bounding_box is None:
@@ -282,14 +296,7 @@ def run_simulation(world, vehicle, camera, args, frame_counter=0):
     num_frames_export = args.num_frames_export
     export_step = args.export_step
 
-    semantic_dir = os.path.abspath(os.path.join(output_dir, "Semantic"))
-    frames_dir = os.path.abspath(os.path.join(output_dir, "Frames"))
-    bbox_dir = os.path.abspath(os.path.join(output_dir, "BoundingBoxes"))
-
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(semantic_dir, exist_ok=True)
-    os.makedirs(frames_dir, exist_ok=True)
-    os.makedirs(bbox_dir, exist_ok=True)
+    semantic_dir, frames_dir, bbox_dir = create_directories(output_dir)
 
     fov = 90
     focal = width / (2.0 * math.tan(fov * math.pi / 360.0))
@@ -325,7 +332,19 @@ def run_simulation(world, vehicle, camera, args, frame_counter=0):
         world_tick_counter += 1
 
         if world_tick_counter % export_step == 0:
-            frame_counter = process_frame(width, height, semantic_dir, frames_dir, bbox_dir, data, frame_counter, world, camera, K)
+            frame_counter = process_frame(
+                width,
+                height,
+                semantic_dir,
+                frames_dir,
+                bbox_dir,
+                data,
+                frame_counter,
+                world,
+                camera,
+                K,
+                args.bbox_distance_range,
+            )
             time.sleep(1)
 
             frame_exported_counter += 1
@@ -333,13 +352,21 @@ def run_simulation(world, vehicle, camera, args, frame_counter=0):
                 print("Finished data generation...")
                 break
     time.sleep(0.1)
-    remove_file_if_exists(os.path.join(semantic_dir, f"segmentation_0.png"))
-    remove_file_if_exists(os.path.join(frames_dir, f"{args.num_frames_export}.png"))
-    remove_file_if_exists(os.path.join(bbox_dir, f"bboxes_{args.num_frames_export}.json"))
 
     return frame_counter
 
-def process_frame(width, height, semantic_dir, frames_dir, bbox_dir, data, frame_counter, world, camera, K):
+def create_directories(output_dir):
+    semantic_dir = os.path.abspath(os.path.join(output_dir, "Semantic"))
+    frames_dir = os.path.abspath(os.path.join(output_dir, "Frames"))
+    bbox_dir = os.path.abspath(os.path.join(output_dir, "BoundingBoxes"))
+
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(semantic_dir, exist_ok=True)
+    os.makedirs(frames_dir, exist_ok=True)
+    os.makedirs(bbox_dir, exist_ok=True)
+    return semantic_dir, frames_dir, bbox_dir
+
+def process_frame(width, height, semantic_dir, frames_dir, bbox_dir, data, frame_counter, world, camera, K, bbox_distance_range=(0.1, 50.0)):
     """Processes a single frame: pauses the simulation, captures the frame, saves the segmentation image, extracts bboxes, and resumes the simulation."""
     print("Pausing simulation...")
     pyautogui.press('`')
@@ -348,7 +375,7 @@ def process_frame(width, height, semantic_dir, frames_dir, bbox_dir, data, frame
     print("Console command executed.")
 
     data["semantic_segmentation"].save_to_disk(os.path.join(semantic_dir, f"segmentation_{frame_counter-1}.png"))
-    bboxes = get_bounding_boxes(world, camera, K)
+    bboxes = get_bounding_boxes(world, camera, K, bbox_distance_range)
     bbox_file = os.path.join(bbox_dir, f"bboxes_{frame_counter}.json")
     with open(bbox_file, 'w') as f:
         json.dump(bboxes, f, indent=4)
@@ -359,7 +386,7 @@ def process_frame(width, height, semantic_dir, frames_dir, bbox_dir, data, frame
     print("Resuming simulation...")
     return frame_counter
 
-def cleanup(client, world, original_settings, vehicle, camera, frame_counter, vehicles_id, all_id):
+def cleanup(client, world, original_settings, vehicle, camera, args, vehicles_id, all_id):
     """Cleans up actors, resets world settings, and deletes trailing HighResShot frames.
     
     Args:
@@ -368,38 +395,36 @@ def cleanup(client, world, original_settings, vehicle, camera, frame_counter, ve
         original_settings: The original settings to restore.
         vehicle: The spawned CARLA vehicle.
         camera: The spawned CARLA camera.
-        frame_counter (int): The final frame counter to identify the extra generated frame.
+        args: The command-line arguments.
         vehicles_id (list): List of IDs for spawned vehicles.
         all_id (list): List of IDs for spawned walkers and controllers.
     """
-    
+    print("Cleaning up actors and resetting world settings...")
     if camera:
         camera.destroy()
     if vehicle:
         vehicle.destroy()
-
+    destroy_commands = []
     if vehicles_id:
-        client.apply_batch([carla.command.DestroyActor(x) for x in vehicles_id])
+        destroy_commands.extend([carla.command.DestroyActor(x) for x in vehicles_id])
     if all_id:
-        # all_actors = world.get_actors(all_id)
-        # for i in range(0, len(all_id), 2):
-        #     all_actors[i].stop()
-        client.apply_batch([carla.command.DestroyActor(x) for x in all_id])
-    if world and original_settings:
-        world.apply_settings(original_settings)
+        # stop walker controllers (list is [controller, actor, controller, actor ...])
+        all_actors = world.get_actors(all_id)
+        for i in range(0, len(all_id), 2):
+            all_actors[i].stop()
+        destroy_commands.extend([carla.command.DestroyActor(x) for x in all_id])
+    if destroy_commands:
+        results = client.apply_batch_sync(destroy_commands)
+    print(f"Successfully sent cleanup command for {len(vehicles_id) + len(all_id)} actors.")
+    # if world and original_settings:
+    #     world.apply_settings(original_settings)
 
-    # time.sleep(1)
-    # print("Deleting the additional HighResShot frames...")
-    # number_prefix = str(frame_counter - 1)
-    # print(number_prefix)
-
-    # if os.path.exists(frames_dir):
-    #     for filename in os.listdir(frames_dir):
-    #         if filename.startswith(number_prefix):
-    #             file_path = os.path.join(frames_dir, filename)
-    #             if os.path.isfile(file_path):
-    #                 os.remove(file_path)
-    #                 print(f"Deleted: {file_path}")
+    semantic_dir, frames_dir, bbox_dir = create_directories(args.output_dir)
+    remove_file_if_exists(os.path.join(semantic_dir, f"segmentation_0.png"))
+    remove_file_if_exists(os.path.join(bbox_dir, f"bboxes_{args.num_frames_export}.json"))
+    for filename in os.listdir(frames_dir):
+        if filename.startswith(str(args.num_frames_export)):
+            remove_file_if_exists(os.path.join(frames_dir, filename))
 
 
 if __name__ == "__main__":
@@ -424,4 +449,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nSimulation stopped.")
     finally:
-        cleanup(client, world, original_settings, vehicle, camera, frame_counter, vehicles_id, all_id)
+        cleanup(client, world, original_settings, vehicle, camera, args, vehicles_id, all_id)
