@@ -43,6 +43,8 @@ def main():
         for obj in bboxes:
             obj_type = obj.get('type', 'unknown')
             dist = obj.get('distance', 0.0)
+            if not dist or dist == 'null':
+                dist = 0.0
             bbox = obj.get('bbox', [0, 0, 0, 0])
             
             x_min, y_min, x_max, y_max = map(int, bbox)

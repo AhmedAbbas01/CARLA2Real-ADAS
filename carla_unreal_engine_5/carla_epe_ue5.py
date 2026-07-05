@@ -205,7 +205,47 @@ def setup_carla(width, height, num_vehicles, num_walkers):
         print(f"Error setting up CARLA: {e}")
         sys.exit(1)
 
-def get_bounding_boxes(world, camera, K, bbox_distance_range=(0.1, 50.0)):
+
+def convert_image_to_array(image):
+    """Converts a CARLA image to a NumPy array using the same convention as the experiment code."""
+    if image is None:
+        return None
+
+    array = np.frombuffer(image.raw_data, dtype=np.uint8)
+    array = array.reshape((image.height, image.width, 4))[:, :, :3]
+    array = array[:, :, ::-1]
+    return array
+
+
+def is_semantic_bbox_visible(bbox, semantic_image):
+    """Keeps a projected bbox only when it overlaps visible semantic evidence."""
+    if semantic_image is None:
+        return True
+
+    x_min, y_min, x_max, y_max = bbox
+    x_min = int(max(0, min(x_min, semantic_image.shape[1] - 1)))
+    y_min = int(max(0, min(y_min, semantic_image.shape[0] - 1)))
+    x_max = int(max(x_min + 1, min(x_max, semantic_image.shape[1])))
+    y_max = int(max(y_min + 1, min(y_max, semantic_image.shape[0])))
+
+    if x_max <= x_min or y_max <= y_min:
+        return False
+
+    patch = semantic_image[y_min:y_max, x_min:x_max]
+    if patch.size == 0:
+        return False
+
+    if patch.ndim == 3:
+        semantic_values = patch[:, :, :3].astype(np.uint32)
+        semantic_values = semantic_values[:, :, 0] + 256 * semantic_values[:, :, 1] + 256 ** 2 * semantic_values[:, :, 2]
+    else:
+        semantic_values = patch.astype(np.uint32)
+
+    visible_fraction = np.count_nonzero(semantic_values > 0) / float(semantic_values.size)
+    return visible_fraction >= 0.01
+
+
+def get_bounding_boxes(world, camera, K, semantic_image=None, bbox_distance_range=(0.1, 50.0)):
     bounding_boxes = []
     min_distance, max_distance = bbox_distance_range
     
@@ -287,7 +327,7 @@ def get_bounding_boxes(world, camera, K, bbox_distance_range=(0.1, 50.0)):
             verts = bb.get_world_vertices(carla.Transform())
             bbox_2d = project_verts_to_bbox(verts)
             
-            if bbox_2d:
+            if bbox_2d and is_semantic_bbox_visible(bbox_2d, semantic_image):
                 type_name = f"{label.name}" if hasattr(label, 'name') else f"{str(label)}"
                 obj_id = 1000+label_index
                 bounding_boxes.append({
@@ -395,8 +435,9 @@ def process_frame(width, height, semantic_dir, frames_dir, bbox_dir, data, frame
     pyautogui.press('enter')
     print("Console command executed.")
 
+    semantic_image = convert_image_to_array(data["semantic_segmentation"])
     data["semantic_segmentation"].save_to_disk(os.path.join(semantic_dir, f"segmentation_{frame_counter-1}.png"))
-    bboxes = get_bounding_boxes(world, camera, K, bbox_distance_range)
+    bboxes = get_bounding_boxes(world, camera, K, semantic_image=semantic_image, bbox_distance_range=bbox_distance_range)
     bbox_file = os.path.join(bbox_dir, f"bboxes_{frame_counter}.json")
     with open(bbox_file, 'w') as f:
         json.dump(bboxes, f, indent=4)
