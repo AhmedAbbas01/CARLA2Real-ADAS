@@ -16,9 +16,11 @@ conda activate carla
 cd ~/workset/CARLA2Real-ADAS/carla_unreal_engine_5
 python3 carla_epe_ue5.py
 # Optional arguments and their corresponding default values:
-    # --width 960 --height 540 --output_dir ../CarlaDataset 
+    # --width 960 --height 540 --output_dir ../Dataset 
     # --num_frames_export 5 --export_step 60 
-    # --num_vehicles 100--num_walkers 40
+    # --num_vehicles 100 --num_walkers 40
+    # --bbox_distance_range [0.1, 50.0]
+    # --map_name Town10HD_Opt --weather_preset ClearNoon
 ```
 
 > ⚠️ **Warning**: The script will automatically input the high-res command and synchronize it with other data that can be exported via the CARLA Python API. **After executing the script, simply focus the CARLA simulator window with your mouse to proceed.**

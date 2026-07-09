@@ -1,13 +1,27 @@
 import carla
 import time
 import os
-import pyautogui
 import random
 import argparse
 import sys
 import numpy as np
 import math
 import json
+
+try:
+    import pyautogui
+except Exception:
+    pyautogui = None
+    print("WARNING: pyautogui is unavailable; some features may be disabled.")
+
+VERBOSE = False
+
+
+def log(message, verbose_only=False):
+    """Print a message, optionally only when verbose logging is enabled."""
+    if verbose_only and not VERBOSE:
+        return
+    print(message)
 
 
 def parse_args():
@@ -32,6 +46,9 @@ def parse_args():
         metavar=("MIN", "MAX"),
         help="Minimum and maximum allowed distance in meters for bounding boxes.",
     )
+    parser.add_argument("--map_name", type=str, default="Town10HD_Opt", help="Name of the CARLA map to load.")
+    parser.add_argument("--weather_preset", type=str, default="ClearNoon", help="Name of the CARLA weather preset.")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging for extra runtime details.")
     return parser.parse_args()
 
 def remove_file_if_exists(file_path):
@@ -47,13 +64,15 @@ def remove_file_if_exists(file_path):
         print(f"{file_path} does not exist.")
 
 def allow_saving_Gbuffers():
-    """Allows saving G-buffers in the Unreal Engine console.
-    """    
-    # Allow saving G-buffers in the Unreal Engine console
+    """Allows saving G-buffers in the Unreal Engine console when pyautogui is available."""
+    if pyautogui is None:
+        log("pyautogui is unavailable; skipping Unreal console command.", verbose_only=True)
+        return
+
     pyautogui.press('`')
     pyautogui.write('r.BufferVisualizationDumpFrames 1')
     pyautogui.press('enter')
-    print("G-buffer saving enabled in Unreal Engine console.")
+    log("G-buffer saving enabled in Unreal Engine console.", verbose_only=True)
 
 def spawn_traffic(client, world, num_vehicles, num_walkers):
     traffic_manager = client.get_trafficmanager(8000)
@@ -69,7 +88,7 @@ def spawn_traffic(client, world, num_vehicles, num_walkers):
     if num_vehicles < number_of_spawn_points:
         random.shuffle(spawn_points)
     elif num_vehicles > number_of_spawn_points:
-        print(f"Requested {num_vehicles} vehicles, but could only find {number_of_spawn_points} spawn points")
+        log(f"Requested {num_vehicles} vehicles, but could only find {number_of_spawn_points} spawn points", verbose_only=True)
         num_vehicles = number_of_spawn_points
 
     batch = []
@@ -88,11 +107,15 @@ def spawn_traffic(client, world, num_vehicles, num_walkers):
         batch.append(carla.command.SpawnActor(blueprint, transform).then(carla.command.SetAutopilot(carla.command.FutureActor, True, traffic_manager.get_port())))
 
     vehicles_id = []
+    vehicle_spawn_failures = []
     for response in client.apply_batch_sync(batch, True):
         if response.error:
-            pass
+            vehicle_spawn_failures.append(response.error)
         else:
             vehicles_id.append(response.actor_id)
+
+    if vehicle_spawn_failures:
+        print(f"Warning: {len(vehicle_spawn_failures)} vehicle spawn(s) failed: {vehicle_spawn_failures[:3]}")
 
     spawn_points = []
     for i in range(num_walkers):
@@ -117,19 +140,31 @@ def spawn_traffic(client, world, num_vehicles, num_walkers):
     results = client.apply_batch_sync(batch, True)
     walkers_list = []
     all_id = []
+    walker_spawn_failures = []
     for i in range(len(results)):
         if not results[i].error:
             walkers_list.append({"id": results[i].actor_id})
+        else:
+            walker_spawn_failures.append(results[i].error)
+
+    if walker_spawn_failures:
+        print(f"Warning: {len(walker_spawn_failures)} walker spawn(s) failed: {walker_spawn_failures[:3]}")
             
     batch = []
     walker_controller_bp = world.get_blueprint_library().find('controller.ai.walker')
     for i in range(len(walkers_list)):
         batch.append(carla.command.SpawnActor(walker_controller_bp, carla.Transform(), walkers_list[i]["id"]))
     results = client.apply_batch_sync(batch, True)
+    controller_spawn_failures = []
     
     for i in range(len(results)):
         if not results[i].error:
             walkers_list[i]["con"] = results[i].actor_id
+        else:
+            controller_spawn_failures.append(results[i].error)
+
+    if controller_spawn_failures:
+        print(f"Warning: {len(controller_spawn_failures)} walker controller spawn(s) failed: {controller_spawn_failures[:3]}")
             
     for i in range(len(walkers_list)):
         all_id.append(walkers_list[i]["con"])
@@ -143,21 +178,15 @@ def spawn_traffic(client, world, num_vehicles, num_walkers):
         all_actors[i].go_to_location(world.get_random_location_from_navigation())
         all_actors[i].set_max_speed(float(walker_speed[int(i/2)]))
 
-    print(f"Spawned {len(vehicles_id)} vehicles and {len(walkers_list)} walkers.")
+    log(f"Spawned {len(vehicles_id)} vehicles and {len(walkers_list)} walkers.", verbose_only=True)
     
     return vehicles_id, all_id
 
-def setup_carla(width, height, num_vehicles, num_walkers):
-    """Connects to CARLA, configures the world, and spawns the necessary actors.
-    
-    Args:
-        width (int): Width of the camera resolution.
-        height (int): Height of the camera resolution.
-        num_vehicles (int): Number of vehicles to spawn.
-        num_walkers (int): Number of walkers to spawn.
-        
+def setup_carla(args):
+    """Connects to CARLA and configures the world settings only.
+
     Returns:
-        tuple: A tuple containing the CARLA client, world, original settings, vehicle, camera, vehicles_id, and all_id.
+        tuple: (client, world, original_settings)
     """
     try:
         client = carla.Client('localhost', 2000)
@@ -166,44 +195,58 @@ def setup_carla(width, height, num_vehicles, num_walkers):
         world = client.get_world()
         original_settings = world.get_settings()
         
+        world = adjust_map_and_weather(client, world, args)
+        
         settings = world.get_settings()
         settings.synchronous_mode = True
         settings.fixed_delta_seconds = 0.05
         world.apply_settings(settings)
 
-        blueprint_library = world.get_blueprint_library()
-        spawn_points = world.get_map().get_spawn_points()
-        vehicle_bp = blueprint_library.filter('vehicle.*')[0]
-
-        if spawn_points:
-            random_spawn_point = random.choice(spawn_points)
-            vehicle = world.spawn_actor(vehicle_bp, random_spawn_point)
-            print(f"Vehicle spawned at location: {random_spawn_point.location}")
-        else:
-            print("No spawn points available in the map.")
-            sys.exit(1)
-
-        vehicle.set_autopilot(True)
-        traffic_manager = client.get_trafficmanager(8000)
-        # Forces lane changes
-        traffic_manager.auto_lane_change(vehicle, True)
-        # Ignores traffic lights 100% of the time
-        traffic_manager.ignore_lights_percentage(vehicle, 100)
-
-        vehicles_id, all_id = spawn_traffic(client, world, num_vehicles, num_walkers)
-
-        camera_bp = blueprint_library.find('sensor.camera.semantic_segmentation')
-        camera_bp.set_attribute('image_size_x', str(width))
-        camera_bp.set_attribute('image_size_y', str(height))
-        camera_bp.set_attribute('fov', '90')
-
-        camera_transform = carla.Transform(carla.Location(x=vehicle.bounding_box.extent.x + 0.1, z=1.4))
-        camera = world.spawn_actor(camera_bp, camera_transform, attach_to=vehicle)
-
-        return client, world, original_settings, vehicle, camera, vehicles_id, all_id
+        return client, world, original_settings
     except Exception as e:
         print(f"Error setting up CARLA: {e}")
         sys.exit(1)
+
+
+def spawn_actors(client, world, width, height, num_vehicles, num_walkers):
+    """Spawns ego vehicle, camera, and traffic (vehicles and walkers).
+
+    Returns:
+        tuple: vehicle, camera, vehicles_id, all_id
+    """
+    blueprint_library = world.get_blueprint_library()
+    spawn_points = world.get_map().get_spawn_points()
+    vehicle_bp = blueprint_library.filter('vehicle.*')[0]
+
+    if spawn_points:
+        random_spawn_point = random.choice(spawn_points)
+        vehicle = world.spawn_actor(vehicle_bp, random_spawn_point)
+        log(f"Vehicle spawned at location: {random_spawn_point.location}", verbose_only=True)
+    else:
+        log("No spawn points available in the map.", verbose_only=True)
+        sys.exit(1)
+
+    vehicle.set_autopilot(True)
+    traffic_manager = client.get_trafficmanager(8000)
+    traffic_manager.auto_lane_change(vehicle, True)
+    traffic_manager.ignore_lights_percentage(vehicle, 100)
+
+    vehicles_id, all_id = spawn_traffic(client, world, num_vehicles, num_walkers)
+
+    camera_bp = blueprint_library.find('sensor.camera.semantic_segmentation')
+    camera_bp.set_attribute('image_size_x', str(width))
+    camera_bp.set_attribute('image_size_y', str(height))
+    camera_bp.set_attribute('fov', '90')
+
+    camera_transform = carla.Transform(carla.Location(x=vehicle.bounding_box.extent.x + 0.1, z=1.4))
+    camera = world.spawn_actor(camera_bp, camera_transform, attach_to=vehicle)
+
+    if camera is None:
+        print("ERROR: Failed to spawn semantic segmentation camera.")
+    else:
+        print(f"Semantic segmentation camera spawned with id {camera.id}.")
+
+    return vehicle, camera, vehicles_id, all_id
 
 
 def convert_image_to_array(image):
@@ -378,17 +421,23 @@ def run_simulation(world, vehicle, camera, args, frame_counter=0):
     frame_exported_counter = 0
     world_tick_counter = 0
 
-    print("Starting simulation... Press Ctrl+C to stop.")
+    log("Starting simulation... Press Ctrl+C to stop.", verbose_only=True)
     time.sleep(2)
     while True:
         vehicle.set_autopilot(True)
         spectator.set_transform(camera.get_transform())
         world.tick()
 
-        while True:
+        start_wait = time.time()
+        while time.time() - start_wait < 5.0:
             if "semantic_segmentation" in data:
                 break
             time.sleep(0.001)
+
+        if "semantic_segmentation" not in data:
+            log("WARNING: Timed out waiting for semantic segmentation data; stopping capture.")
+            log("INFO: Check that the semantic camera is attached correctly and that the sensor callback is firing.", verbose_only=True)
+            break
 
         world_tick_counter += 1
 
@@ -429,14 +478,26 @@ def create_directories(output_dir):
 
 def process_frame(width, height, semantic_dir, frames_dir, bbox_dir, data, frame_counter, world, camera, K, bbox_distance_range=(0.1, 50.0)):
     """Processes a single frame: pauses the simulation, captures the frame, saves the segmentation image, extracts bboxes, and resumes the simulation."""
-    print("Pausing simulation...")
-    pyautogui.press('`')
-    pyautogui.write(f'HighResShot filename={os.path.join(frames_dir, f"{frame_counter}.png")} {width}x{height}')
-    pyautogui.press('enter')
-    print("Console command executed.")
+    log("Pausing simulation...", verbose_only=True)
+    if pyautogui is not None:
+        pyautogui.press('`')
+        pyautogui.write(f'HighResShot filename={os.path.join(frames_dir, f"{frame_counter}.png")} {width}x{height}')
+        pyautogui.press('enter')
+        log("Console command executed.", verbose_only=True)
+    else:
+        log("pyautogui is unavailable; skipping HighResShot console command.", verbose_only=True)
+
+    if "semantic_segmentation" not in data or data["semantic_segmentation"] is None:
+        print("WARNING: Missing semantic segmentation data for this frame; skipping export.")
+        return frame_counter
 
     semantic_image = convert_image_to_array(data["semantic_segmentation"])
+    if semantic_image is None:
+        print("WARNING: Semantic image conversion returned no data for this frame; skipping export.")
+        return frame_counter
+
     data["semantic_segmentation"].save_to_disk(os.path.join(semantic_dir, f"segmentation_{frame_counter-1}.png"))
+    log(f"Saved semantic segmentation to {os.path.join(semantic_dir, f'segmentation_{frame_counter-1}.png')}", verbose_only=True)
     bboxes = get_bounding_boxes(world, camera, K, semantic_image=semantic_image, bbox_distance_range=bbox_distance_range)
     bbox_file = os.path.join(bbox_dir, f"bboxes_{frame_counter}.json")
     with open(bbox_file, 'w') as f:
@@ -445,7 +506,7 @@ def process_frame(width, height, semantic_dir, frames_dir, bbox_dir, data, frame
     data.clear()
     frame_counter += 1
             
-    print("Resuming simulation...")
+    log("Resuming simulation...", verbose_only=True)
     return frame_counter
 
 def cleanup(client, world, original_settings, vehicle, camera, args, vehicles_id, all_id):
@@ -489,10 +550,69 @@ def cleanup(client, world, original_settings, vehicle, camera, args, vehicles_id
             remove_file_if_exists(os.path.join(frames_dir, filename))
 
 
+def rename_output_dir(args):
+    """Renames the output directory based on the selected map and weather.
+    
+    Args:
+        args: The parsed command-line arguments.
+    """
+    base_output_dir = os.path.abspath(args.output_dir)
+    new_output_dir = os.path.join(base_output_dir, f"{args.map_name}_{args.weather_preset}")
+    args.output_dir = new_output_dir
+    log(f"Output directory set to: {args.output_dir}", verbose_only=False)
+
+
+def adjust_map_and_weather(client, world, args):
+    """Adjusts the CARLA map and weather settings.
+
+    This will attempt to load the requested map (if available) and apply the
+    requested weather preset. If the map name is invalid it will keep the
+    current world. Returns the (possibly new) world object.
+    """
+    available_maps = [
+        'Mine_01', 'Town10HD_Opt',
+    ]
+
+    available_weathers = [
+        'ClearNoon','CloudyNoon','WetNoon','WetCloudyNoon','SoftRainNoon','MidRainyNoon','HardRainNoon',
+        'ClearSunset','CloudySunset','WetSunset','WetCloudySunset','SoftRainSunset','MidRainSunset','HardRainSunset'
+    ]
+    
+    # Load map if requested and available
+    map_name = getattr(args, 'map_name', None)
+    if map_name and map_name in available_maps:
+        try:
+            world = client.load_world(map_name, map_layers=carla.MapLayer.All)
+            print(f"Loaded map: {map_name}")
+        except Exception as e:
+            print(f"Failed to load map '{map_name}': {e}")
+    else:
+        if map_name:
+            print(f"Map '{map_name}' not recognized. Keeping current map.")
+
+    # Apply weather preset if available
+    weather_name = getattr(args, 'weather_preset', None)
+    if weather_name and weather_name in available_weathers:
+        wp = getattr(carla.WeatherParameters, weather_name, None)
+        if wp is not None:
+            try:
+                world.set_weather(wp)
+                print(f"Applied weather preset: {weather_name}")
+            except Exception as e:
+                print(f"Failed to apply weather '{weather_name}': {e}")
+        else:
+            print(f"Weather preset '{weather_name}' not found in carla.WeatherParameters.")
+    else:
+        if weather_name:
+            print(f"Weather preset '{weather_name}' not recognized. Keeping current weather.")
+
+    return world
+    
 if __name__ == "__main__":
     """Main entry point for the script."""
     args = parse_args()
-    
+    VERBOSE = args.verbose
+    rename_output_dir(args)
     client = None
     world = None
     vehicle = None
@@ -503,9 +623,12 @@ if __name__ == "__main__":
     frame_counter = 1
 
     try:
-        client, world, original_settings, vehicle, camera, vehicles_id, all_id = setup_carla(args.width, args.height, args.num_vehicles, args.num_walkers)
-        time.sleep(2)
+        client, world, original_settings = setup_carla(args)
+        time.sleep(1)
         allow_saving_Gbuffers()
+        time.sleep(1)
+        vehicle, camera, vehicles_id, all_id = spawn_actors(client, world, args.width, args.height, args.num_vehicles, args.num_walkers)
+        time.sleep(1)
         frame_counter = run_simulation(world, vehicle, camera, args, frame_counter)
         
     except KeyboardInterrupt:
