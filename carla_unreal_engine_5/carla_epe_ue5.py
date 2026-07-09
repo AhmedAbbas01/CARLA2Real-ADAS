@@ -8,20 +8,20 @@ import numpy as np
 import math
 import json
 
-try:
-    import pyautogui
-except Exception:
-    pyautogui = None
-    print("WARNING: pyautogui is unavailable; some features may be disabled.")
 
 VERBOSE = False
-
 
 def log(message, verbose_only=False):
     """Print a message, optionally only when verbose logging is enabled."""
     if verbose_only and not VERBOSE:
         return
     print(message)
+
+try:
+    import pyautogui
+except Exception:
+    pyautogui = None
+    log("WARNING: pyautogui is unavailable; some features may be disabled.", verbose_only=False)
 
 
 def parse_args():
@@ -59,9 +59,9 @@ def remove_file_if_exists(file_path):
     """
     if os.path.isfile(file_path):
         os.remove(file_path)
-        print(f"{file_path} has been removed.")
+        log(f"{file_path} has been removed.", verbose_only=False)
     else:
-        print(f"{file_path} does not exist.")
+        log(f"{file_path} does not exist.", verbose_only=True)
 
 def allow_saving_Gbuffers():
     """Allows saving G-buffers in the Unreal Engine console when pyautogui is available."""
@@ -72,7 +72,7 @@ def allow_saving_Gbuffers():
     pyautogui.press('`')
     pyautogui.write('r.BufferVisualizationDumpFrames 1')
     pyautogui.press('enter')
-    log("G-buffer saving enabled in Unreal Engine console.", verbose_only=True)
+    log("G-buffer saving enabled in Unreal Engine console.", verbose_only=False)
 
 def spawn_traffic(client, world, num_vehicles, num_walkers):
     traffic_manager = client.get_trafficmanager(8000)
@@ -115,7 +115,7 @@ def spawn_traffic(client, world, num_vehicles, num_walkers):
             vehicles_id.append(response.actor_id)
 
     if vehicle_spawn_failures:
-        print(f"Warning: {len(vehicle_spawn_failures)} vehicle spawn(s) failed: {vehicle_spawn_failures[:3]}")
+        log(f"Warning: {len(vehicle_spawn_failures)} vehicle spawn(s) failed: {vehicle_spawn_failures[:3]}", verbose_only=True)
 
     spawn_points = []
     for i in range(num_walkers):
@@ -148,7 +148,7 @@ def spawn_traffic(client, world, num_vehicles, num_walkers):
             walker_spawn_failures.append(results[i].error)
 
     if walker_spawn_failures:
-        print(f"Warning: {len(walker_spawn_failures)} walker spawn(s) failed: {walker_spawn_failures[:3]}")
+        log(f"Warning: {len(walker_spawn_failures)} walker spawn(s) failed: {walker_spawn_failures[:3]}", verbose_only=True)
             
     batch = []
     walker_controller_bp = world.get_blueprint_library().find('controller.ai.walker')
@@ -164,7 +164,7 @@ def spawn_traffic(client, world, num_vehicles, num_walkers):
             controller_spawn_failures.append(results[i].error)
 
     if controller_spawn_failures:
-        print(f"Warning: {len(controller_spawn_failures)} walker controller spawn(s) failed: {controller_spawn_failures[:3]}")
+        log(f"Warning: {len(controller_spawn_failures)} walker controller spawn(s) failed: {controller_spawn_failures[:3]}", verbose_only=True)
             
     for i in range(len(walkers_list)):
         all_id.append(walkers_list[i]["con"])
@@ -178,7 +178,7 @@ def spawn_traffic(client, world, num_vehicles, num_walkers):
         all_actors[i].go_to_location(world.get_random_location_from_navigation())
         all_actors[i].set_max_speed(float(walker_speed[int(i/2)]))
 
-    log(f"Spawned {len(vehicles_id)} vehicles and {len(walkers_list)} walkers.", verbose_only=True)
+    log(f"Spawned {len(vehicles_id)} vehicles and {len(walkers_list)} walkers.", verbose_only=False)
     
     return vehicles_id, all_id
 
@@ -204,7 +204,7 @@ def setup_carla(args):
 
         return client, world, original_settings
     except Exception as e:
-        print(f"Error setting up CARLA: {e}")
+        log(f"Error setting up CARLA: {e}", verbose_only=False)
         sys.exit(1)
 
 
@@ -223,7 +223,7 @@ def spawn_actors(client, world, width, height, num_vehicles, num_walkers):
         vehicle = world.spawn_actor(vehicle_bp, random_spawn_point)
         log(f"Vehicle spawned at location: {random_spawn_point.location}", verbose_only=True)
     else:
-        log("No spawn points available in the map.", verbose_only=True)
+        log("No spawn points available in the map.", verbose_only=False)
         sys.exit(1)
 
     vehicle.set_autopilot(True)
@@ -242,9 +242,9 @@ def spawn_actors(client, world, width, height, num_vehicles, num_walkers):
     camera = world.spawn_actor(camera_bp, camera_transform, attach_to=vehicle)
 
     if camera is None:
-        print("ERROR: Failed to spawn semantic segmentation camera.")
+        log("ERROR: Failed to spawn semantic segmentation camera.", verbose_only=False)
     else:
-        print(f"Semantic segmentation camera spawned with id {camera.id}.")
+        log(f"Semantic segmentation camera spawned with id {camera.id}.", verbose_only=True)
 
     return vehicle, camera, vehicles_id, all_id
 
@@ -380,7 +380,44 @@ def get_bounding_boxes(world, camera, K, semantic_image=None, bbox_distance_rang
                     "bbox": bbox_2d
                 })
 
-    return bounding_boxes
+    # Filter overlapping bounding boxes of the same type
+    filtered_bounding_boxes = []
+    
+    def get_area(box_dict):
+        b = box_dict["bbox"]
+        return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+    # Sort boxes by area descending to easily keep the larger one
+    bounding_boxes.sort(key=get_area, reverse=True)
+
+    for box in bounding_boxes:
+        should_keep = True
+        for kept_box in filtered_bounding_boxes:
+            b1 = box["bbox"]
+            b2 = kept_box["bbox"]
+            
+            x_min_inter = max(b1[0], b2[0])
+            y_min_inter = max(b1[1], b2[1])
+            x_max_inter = min(b1[2], b2[2])
+            y_max_inter = min(b1[3], b2[3])
+
+            inter_width = max(0.0, x_max_inter - x_min_inter)
+            inter_height = max(0.0, y_max_inter - y_min_inter)
+            inter_area = inter_width * inter_height
+
+            area1 = get_area(box)
+            area2 = get_area(kept_box)
+            smaller_area = min(area1, area2)
+            
+            if smaller_area > 0:
+                overlap_ratio = inter_area / smaller_area
+                if overlap_ratio >= 0.85 and box["distance"] >= kept_box["distance"]:
+                    should_keep = False
+                    break
+        if should_keep:
+            filtered_bounding_boxes.append(box)
+
+    return filtered_bounding_boxes
     
 def run_simulation(world, vehicle, camera, args, frame_counter=0):
     """Runs the CARLA simulation loop and handles data generation.
@@ -421,7 +458,7 @@ def run_simulation(world, vehicle, camera, args, frame_counter=0):
     frame_exported_counter = 0
     world_tick_counter = 0
 
-    log("Starting simulation... Press Ctrl+C to stop.", verbose_only=True)
+    log("Starting simulation... Press Ctrl+C to stop.", verbose_only=False)
     time.sleep(2)
     while True:
         vehicle.set_autopilot(True)
@@ -435,8 +472,8 @@ def run_simulation(world, vehicle, camera, args, frame_counter=0):
             time.sleep(0.001)
 
         if "semantic_segmentation" not in data:
-            log("WARNING: Timed out waiting for semantic segmentation data; stopping capture.")
-            log("INFO: Check that the semantic camera is attached correctly and that the sensor callback is firing.", verbose_only=True)
+            log("WARNING: Timed out waiting for semantic segmentation data; stopping capture.", verbose_only=False)
+            log("INFO: Check that the semantic camera is attached correctly and that the sensor callback is firing.", verbose_only=False)
             break
 
         world_tick_counter += 1
@@ -459,7 +496,7 @@ def run_simulation(world, vehicle, camera, args, frame_counter=0):
 
             frame_exported_counter += 1
             if frame_exported_counter == num_frames_export:
-                print("Finished data generation...")
+                log("Finished data generation...", verbose_only=True)
                 break
     time.sleep(0.1)
 
@@ -478,7 +515,7 @@ def create_directories(output_dir):
 
 def process_frame(width, height, semantic_dir, frames_dir, bbox_dir, data, frame_counter, world, camera, K, bbox_distance_range=(0.1, 50.0)):
     """Processes a single frame: pauses the simulation, captures the frame, saves the segmentation image, extracts bboxes, and resumes the simulation."""
-    log("Pausing simulation...", verbose_only=True)
+    log("Pausing simulation...", verbose_only=False)
     if pyautogui is not None:
         pyautogui.press('`')
         pyautogui.write(f'HighResShot filename={os.path.join(frames_dir, f"{frame_counter}.png")} {width}x{height}')
@@ -488,12 +525,12 @@ def process_frame(width, height, semantic_dir, frames_dir, bbox_dir, data, frame
         log("pyautogui is unavailable; skipping HighResShot console command.", verbose_only=True)
 
     if "semantic_segmentation" not in data or data["semantic_segmentation"] is None:
-        print("WARNING: Missing semantic segmentation data for this frame; skipping export.")
+        log("WARNING: Missing semantic segmentation data for this frame; skipping export.", verbose_only=False)
         return frame_counter
 
     semantic_image = convert_image_to_array(data["semantic_segmentation"])
     if semantic_image is None:
-        print("WARNING: Semantic image conversion returned no data for this frame; skipping export.")
+        log("WARNING: Semantic image conversion returned no data for this frame; skipping export.", verbose_only=False)
         return frame_counter
 
     data["semantic_segmentation"].save_to_disk(os.path.join(semantic_dir, f"segmentation_{frame_counter-1}.png"))
@@ -506,7 +543,7 @@ def process_frame(width, height, semantic_dir, frames_dir, bbox_dir, data, frame
     data.clear()
     frame_counter += 1
             
-    log("Resuming simulation...", verbose_only=True)
+    log(f"Resuming simulation... Frame #{frame_counter}", verbose_only=False)
     return frame_counter
 
 def cleanup(client, world, original_settings, vehicle, camera, args, vehicles_id, all_id):
@@ -522,7 +559,7 @@ def cleanup(client, world, original_settings, vehicle, camera, args, vehicles_id
         vehicles_id (list): List of IDs for spawned vehicles.
         all_id (list): List of IDs for spawned walkers and controllers.
     """
-    print("Cleaning up actors and resetting world settings...")
+    log("Cleaning up actors and resetting world settings...", verbose_only=False)
     if camera:
         camera.destroy()
     if vehicle:
@@ -538,7 +575,7 @@ def cleanup(client, world, original_settings, vehicle, camera, args, vehicles_id
         destroy_commands.extend([carla.command.DestroyActor(x) for x in all_id])
     if destroy_commands:
         results = client.apply_batch_sync(destroy_commands)
-    print(f"Successfully sent cleanup command for {len(vehicles_id) + len(all_id)} actors.")
+    log(f"Successfully sent cleanup command for {len(vehicles_id) + len(all_id)} actors.", verbose_only=True)
     # if world and original_settings:
     #     world.apply_settings(original_settings)
 
@@ -577,34 +614,42 @@ def adjust_map_and_weather(client, world, args):
         'ClearNoon','CloudyNoon','WetNoon','WetCloudyNoon','SoftRainNoon','MidRainyNoon','HardRainNoon',
         'ClearSunset','CloudySunset','WetSunset','WetCloudySunset','SoftRainSunset','MidRainSunset','HardRainSunset'
     ]
-    
+
     # Load map if requested and available
     map_name = getattr(args, 'map_name', None)
     if map_name and map_name in available_maps:
-        try:
-            world = client.load_world(map_name, map_layers=carla.MapLayer.All)
-            print(f"Loaded map: {map_name}")
-        except Exception as e:
-            print(f"Failed to load map '{map_name}': {e}")
+        current_map = world.get_map().name
+        if current_map.split('/')[-1] != map_name:
+            try:
+                world = client.load_world(map_name, map_layers=carla.MapLayer.All)
+                log(f"Loaded map: {map_name}", verbose_only=False)
+            except Exception as e:
+                log(f"Failed to load map '{map_name}': {e}", verbose_only=False)
+        else:
+            log(f"Map '{map_name}' is already loaded. Skipping map load.", verbose_only=False)
     else:
         if map_name:
-            print(f"Map '{map_name}' not recognized. Keeping current map.")
+            log(f"Map '{map_name}' not recognized. Keeping current map.", verbose_only=False)
 
     # Apply weather preset if available
     weather_name = getattr(args, 'weather_preset', None)
     if weather_name and weather_name in available_weathers:
         wp = getattr(carla.WeatherParameters, weather_name, None)
         if wp is not None:
-            try:
-                world.set_weather(wp)
-                print(f"Applied weather preset: {weather_name}")
-            except Exception as e:
-                print(f"Failed to apply weather '{weather_name}': {e}")
+            current_weather = world.get_weather()
+            if current_weather != wp:
+                try:
+                    world.set_weather(wp)
+                    log(f"Applied weather preset: {weather_name}", verbose_only=False)
+                except Exception as e:
+                    log(f"Failed to apply weather '{weather_name}': {e}", verbose_only=False)
+            else:
+                log(f"Weather preset '{weather_name}' is already active. Skipping weather load.", verbose_only=False)
         else:
-            print(f"Weather preset '{weather_name}' not found in carla.WeatherParameters.")
+            log(f"Weather preset '{weather_name}' not found in carla.WeatherParameters.", verbose_only=False)
     else:
         if weather_name:
-            print(f"Weather preset '{weather_name}' not recognized. Keeping current weather.")
+            log(f"Weather preset '{weather_name}' not recognized. Keeping current weather.", verbose_only=False)
 
     return world
     
@@ -632,6 +677,6 @@ if __name__ == "__main__":
         frame_counter = run_simulation(world, vehicle, camera, args, frame_counter)
         
     except KeyboardInterrupt:
-        print("\nSimulation stopped.")
+        log("\nSimulation stopped.", verbose_only=False)
     finally:
         cleanup(client, world, original_settings, vehicle, camera, args, vehicles_id, all_id)
