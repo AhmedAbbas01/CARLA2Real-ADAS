@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default="../Dataset/", help="Directory to save the frames.")
     parser.add_argument("--num_frames_export", type=int, default=5, help="Number of frames to export.")
     parser.add_argument("--export_step", type=int, default=60, help="Step size between frame exports.")
-    parser.add_argument("--num_vehicles", type=int, default=100, help="Number of vehicles to spawn.")
+    parser.add_argument("--num_vehicles", type=int, default=70, help="Number of vehicles to spawn.")
     parser.add_argument("--num_walkers", type=int, default=40, help="Number of pedestrians to spawn.")
     parser.add_argument(
         "--bbox_distance_range",
@@ -75,6 +75,7 @@ def allow_saving_Gbuffers():
     log("G-buffer saving enabled in Unreal Engine console.", verbose_only=False)
 
 def spawn_traffic(client, world, num_vehicles, num_walkers):
+    # 1. Setup Traffic Manager
     traffic_manager = client.get_trafficmanager(8000)
     traffic_manager.set_global_distance_to_leading_vehicle(2.5)
     traffic_manager.set_synchronous_mode(True)
@@ -91,6 +92,9 @@ def spawn_traffic(client, world, num_vehicles, num_walkers):
         log(f"Requested {num_vehicles} vehicles, but could only find {number_of_spawn_points} spawn points", verbose_only=True)
         num_vehicles = number_of_spawn_points
 
+    # --------------
+    # Spawn Vehicles
+    # --------------
     batch = []
     for n, transform in enumerate(spawn_points):
         if n >= num_vehicles:
@@ -107,80 +111,128 @@ def spawn_traffic(client, world, num_vehicles, num_walkers):
         batch.append(carla.command.SpawnActor(blueprint, transform).then(carla.command.SetAutopilot(carla.command.FutureActor, True, traffic_manager.get_port())))
 
     vehicles_id = []
-    vehicle_spawn_failures = []
     for response in client.apply_batch_sync(batch, True):
-        if response.error:
-            vehicle_spawn_failures.append(response.error)
-        else:
+        if not response.error:
             vehicles_id.append(response.actor_id)
+            
+    # Set lane change attributes post-spawn
+    all_vehicles = world.get_actors(vehicles_id)
+    for vehicle in all_vehicles:
+        if vehicle is not None:
+            traffic_manager.auto_lane_change(vehicle, True)
 
-    if vehicle_spawn_failures:
-        log(f"Warning: {len(vehicle_spawn_failures)} vehicle spawn(s) failed: {vehicle_spawn_failures[:3]}", verbose_only=True)
-
-    spawn_points = []
+    # -------------
+    # Spawn Walkers
+    # -------------
+    walker_spawn_points = []
     for i in range(num_walkers):
-        spawn_point = carla.Transform()
         loc = world.get_random_location_from_navigation()
-        if (loc != None):
+        if loc is not None:
+            spawn_point = carla.Transform()
             spawn_point.location = loc
-            spawn_points.append(spawn_point)
+            # CRITICAL FIX FOR UE5-DEV: Add vertical offset to prevent bounding box collision with ground
+            spawn_point.location.z += 0.6 
+            walker_spawn_points.append(spawn_point)
             
     batch = []
-    walker_speed = []
-    for spawn_point in spawn_points:
+    walker_speeds = []
+    for spawn_point in walker_spawn_points:
         walker_bp = random.choice(blueprintsWalkers)
         if walker_bp.has_attribute('is_invincible'):
             walker_bp.set_attribute('is_invincible', 'false')
+        
+        # Safe handling of walker speeds
         if walker_bp.has_attribute('speed'):
-            walker_speed.append(walker_bp.get_attribute('speed').recommended_values[1])
+            speeds = walker_bp.get_attribute('speed').recommended_values
+            # index 1 usually represents running/fast walking, 0 is walking. Let's sample safely:
+            walker_speeds.append(speeds[1] if len(speeds) > 1 else speeds[0])
         else:
-            walker_speed.append(0.0)
+            walker_speeds.append(0.0)
+            
         batch.append(carla.command.SpawnActor(walker_bp, spawn_point))
         
     results = client.apply_batch_sync(batch, True)
+    
+    # Track successfully spawned walkers and their designated speeds cleanly
     walkers_list = []
-    all_id = []
-    walker_spawn_failures = []
+    final_walker_speeds = []
     for i in range(len(results)):
         if not results[i].error:
             walkers_list.append({"id": results[i].actor_id})
-        else:
-            walker_spawn_failures.append(results[i].error)
+            final_walker_speeds.append(walker_speeds[i])
 
-    if walker_spawn_failures:
-        log(f"Warning: {len(walker_spawn_failures)} walker spawn(s) failed: {walker_spawn_failures[:3]}", verbose_only=True)
-            
+    # -------------------------
+    # Spawn Walker Controllers
+    # -------------------------
     batch = []
     walker_controller_bp = world.get_blueprint_library().find('controller.ai.walker')
     for i in range(len(walkers_list)):
         batch.append(carla.command.SpawnActor(walker_controller_bp, carla.Transform(), walkers_list[i]["id"]))
+        
     results = client.apply_batch_sync(batch, True)
-    controller_spawn_failures = []
     
+    # Match controllers to walkers
     for i in range(len(results)):
         if not results[i].error:
             walkers_list[i]["con"] = results[i].actor_id
-        else:
-            controller_spawn_failures.append(results[i].error)
 
-    if controller_spawn_failures:
-        log(f"Warning: {len(controller_spawn_failures)} walker controller spawn(s) failed: {controller_spawn_failures[:3]}", verbose_only=True)
-            
+    # Flatten IDs for a single world fetch
+    all_id = []
     for i in range(len(walkers_list)):
-        all_id.append(walkers_list[i]["con"])
-        all_id.append(walkers_list[i]["id"])
+        if "con" in walkers_list[i]: # Ensure controller spawned successfully
+            all_id.append(walkers_list[i]["con"])
+            all_id.append(walkers_list[i]["id"])
+            
     all_actors = world.get_actors(all_id)
 
+    # Sync with world before driving AI
     world.tick()
 
+    # Initialize Walker AI Movements
+    controller_index = 0
     for i in range(0, len(all_id), 2):
-        all_actors[i].start()
-        all_actors[i].go_to_location(world.get_random_location_from_navigation())
-        all_actors[i].set_max_speed(float(walker_speed[int(i/2)]))
+        controller = all_actors[i]
+        if controller is not None:
+            controller.start()
+            controller.go_to_location(world.get_random_location_from_navigation())
+            controller.set_max_speed(float(final_walker_speeds[controller_index]))
+        controller_index += 1
 
-    log(f"Spawned {len(vehicles_id)} vehicles and {len(walkers_list)} walkers.", verbose_only=False)
-    
+    log(f"Spawned {len(vehicles_id)} vehicles and {len(all_id)//2} walkers.", verbose_only=False)
     return vehicles_id, all_id
+
+def randomize_traffic(client, world, args, vehicle):
+    """Destroy existing traffic actors and respawn a new randomized set.
+
+    Returns:
+        tuple: (vehicles_id, all_id) new lists after respawn
+    """
+    log("Randomizing traffic to resolve potential jam...", verbose_only=False)
+    destroy_commands = []
+
+    all_actors = world.get_actors()
+
+    # Filter out the ego vehicle
+    non_ego_actors = [actor for actor in all_actors if actor.id != vehicle.id]
+        
+    destroy_commands.extend([carla.command.DestroyActor(x) for x in non_ego_actors if x.type_id.startswith('vehicle.') or x.type_id.startswith('walker.') or x.type_id.startswith('controller.')])
+    
+    if destroy_commands:
+        try:
+            client.apply_batch_sync(destroy_commands, True)
+        except Exception as e:
+            log(f"Warning: error destroying actors during randomize: {e}", verbose_only=True)
+
+    # small pause to let the world stabilize
+    time.sleep(2)
+
+    # respawn traffic
+    try:
+        new_vehicles, new_all = spawn_traffic(client, world, args.num_vehicles, args.num_walkers)
+        return new_vehicles, new_all
+    except Exception as e:
+        log(f"Failed to respawn traffic: {e}", verbose_only=False)
+        return [], []
 
 def setup_carla(args):
     """Connects to CARLA and configures the world settings only.
@@ -230,6 +282,7 @@ def spawn_actors(client, world, width, height, num_vehicles, num_walkers):
     traffic_manager = client.get_trafficmanager(8000)
     traffic_manager.auto_lane_change(vehicle, True)
     traffic_manager.ignore_lights_percentage(vehicle, 100)
+    traffic_manager.distance_to_leading_vehicle(vehicle, 5.0)
 
     vehicles_id, all_id = spawn_traffic(client, world, num_vehicles, num_walkers)
 
@@ -419,7 +472,7 @@ def get_bounding_boxes(world, camera, K, semantic_image=None, bbox_distance_rang
 
     return filtered_bounding_boxes
     
-def run_simulation(world, vehicle, camera, args, frame_counter=0):
+def run_simulation(world, vehicle, camera, args, frame_counter=0, client=None, vehicles_id=None, all_id=None):
     """Runs the CARLA simulation loop and handles data generation.
     
     Args:
@@ -457,14 +510,27 @@ def run_simulation(world, vehicle, camera, args, frame_counter=0):
 
     frame_exported_counter = 0
     world_tick_counter = 0
+    stall_count = 0
+    # threshold in meters under which the ego is considered not moved between processed frames
+    stall_threshold = 0.5
+    last_processed_loc = None
+
+    if vehicles_id is None:
+        vehicles_id = []
+    if all_id is None:
+        all_id = []
 
     log("Starting simulation... Press Ctrl+C to stop.", verbose_only=False)
-    time.sleep(2)
     while True:
+        processing_start_time = time.time()
         vehicle.set_autopilot(True)
         spectator.set_transform(camera.get_transform())
-        world.tick()
+        try:
+            world.tick()
+        except Exception as e:
+            log(f"Error occurred while ticking the world: {e}", verbose_only=False)
 
+        # process and possibly export a frame at configured steps
         start_wait = time.time()
         while time.time() - start_wait < 5.0:
             if "semantic_segmentation" in data:
@@ -479,6 +545,12 @@ def run_simulation(world, vehicle, camera, args, frame_counter=0):
         world_tick_counter += 1
 
         if world_tick_counter % export_step == 0:
+            # capture ego location at processing time
+            try:
+                cur_loc = vehicle.get_transform().location if vehicle is not None else None
+            except Exception:
+                cur_loc = None
+
             frame_counter = process_frame(
                 width,
                 height,
@@ -492,15 +564,41 @@ def run_simulation(world, vehicle, camera, args, frame_counter=0):
                 K,
                 args.bbox_distance_range,
             )
-            time.sleep(1)
+            # time.sleep(1)
+
+            # After processing a frame, update stall detection based on processed-frame positions
+            try:
+                if cur_loc is not None:
+                    if last_processed_loc is None:
+                        # first processed frame, initialize reference
+                        stall_count = 0
+                    else:
+                        dist_moved = math.sqrt((cur_loc.x - last_processed_loc.x) ** 2 + (cur_loc.y - last_processed_loc.y) ** 2 + (cur_loc.z - last_processed_loc.z) ** 2)
+                        if dist_moved < stall_threshold:
+                            stall_count += 1
+                        else:
+                            stall_count = 0
+                    last_processed_loc = cur_loc
+            except Exception:
+                stall_count = 0
+
+            if stall_count >= 3:
+                log(f"Detected possible traffic jam (ego stalled for {stall_count} processed frames). Randomizing traffic...", verbose_only=False)
+                if client is not None:
+                    try:
+                        vehicles_id, all_id = randomize_traffic(client, world, args, vehicle)
+                    except Exception as e:
+                        log(f"Error during traffic randomization: {e}", verbose_only=False)
+                stall_count = 0
 
             frame_exported_counter += 1
             if frame_exported_counter == num_frames_export:
                 log("Finished data generation...", verbose_only=True)
                 break
+            log(f"Processed frame {frame_counter} in time {time.time() - processing_start_time:.2f} seconds)", verbose_only=False)
     time.sleep(0.1)
 
-    return frame_counter
+    return frame_counter, vehicles_id, all_id
 
 def create_directories(output_dir):
     semantic_dir = os.path.abspath(os.path.join(output_dir, "Semantic"))
@@ -515,7 +613,7 @@ def create_directories(output_dir):
 
 def process_frame(width, height, semantic_dir, frames_dir, bbox_dir, data, frame_counter, world, camera, K, bbox_distance_range=(0.1, 50.0)):
     """Processes a single frame: pauses the simulation, captures the frame, saves the segmentation image, extracts bboxes, and resumes the simulation."""
-    log("Pausing simulation...", verbose_only=False)
+    log("Pausing simulation...", verbose_only=True)
     if pyautogui is not None:
         pyautogui.press('`')
         pyautogui.write(f'HighResShot filename={os.path.join(frames_dir, f"{frame_counter}.png")} {width}x{height}')
@@ -543,7 +641,7 @@ def process_frame(width, height, semantic_dir, frames_dir, bbox_dir, data, frame
     data.clear()
     frame_counter += 1
             
-    log(f"Resuming simulation... Frame #{frame_counter}", verbose_only=False)
+    log(f"Resuming simulation...", verbose_only=True)
     return frame_counter
 
 def cleanup(client, world, original_settings, vehicle, camera, args, vehicles_id, all_id):
@@ -669,12 +767,12 @@ if __name__ == "__main__":
 
     try:
         client, world, original_settings = setup_carla(args)
-        time.sleep(1)
+        time.sleep(2)
         allow_saving_Gbuffers()
         time.sleep(1)
         vehicle, camera, vehicles_id, all_id = spawn_actors(client, world, args.width, args.height, args.num_vehicles, args.num_walkers)
         time.sleep(1)
-        frame_counter = run_simulation(world, vehicle, camera, args, frame_counter)
+        frame_counter, vehicles_id, all_id = run_simulation(world, vehicle, camera, args, frame_counter, client, vehicles_id, all_id)
         
     except KeyboardInterrupt:
         log("\nSimulation stopped.", verbose_only=False)
