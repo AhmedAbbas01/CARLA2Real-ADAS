@@ -400,6 +400,7 @@ def get_bounding_boxes(world, camera, K, semantic_image=None, bbox_distance_rang
         carla.CityObjectLabel.RailTrack,
         carla.CityObjectLabel.TrafficSigns,
         carla.CityObjectLabel.TrafficLight,
+        carla.CityObjectLabel.Pedestrians
     ]
     
     rendered_centers = set()
@@ -532,7 +533,7 @@ def run_simulation(world, vehicle, camera, args, frame_counter=0, client=None, v
 
         # process and possibly export a frame at configured steps
         start_wait = time.time()
-        while time.time() - start_wait < 5.0:
+        while time.time() - start_wait < 20.0:
             if "semantic_segmentation" in data:
                 break
             time.sleep(0.001)

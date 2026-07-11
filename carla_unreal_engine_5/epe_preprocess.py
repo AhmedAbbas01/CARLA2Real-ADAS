@@ -181,9 +181,7 @@ def process_single_frame(image_idx, frames_path, gt_map_path, buffers, grayscale
 
     label_map = split_gt_label(gt_map, multi_gt_labels)
 
-    print(f"Processed Image: {np.array(image).shape}")
-    print(f"Processed Gbuffers: {gbuffers.shape}")
-    print(f"Processed Masks: {label_map.shape}")
+    print(f"Processed Image: {frames_path}/{image_idx}.png")
 
     cv2.imwrite(os.path.join(out_frame_path, f"FinalColor-{image_idx}.png"), np.array(image))
     np.savez_compressed(os.path.join(out_gbuffer_path, f"GBuffer-{image_idx}.npz"), gbuffers)
