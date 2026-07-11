@@ -1,12 +1,16 @@
 # Carla2Real-ADAS: A Simulation-to-Real Transfer Framework for Vision-Based ADAS
 
-![Carla2Real-ADAS](https://img.shields.io/badge/Status-Active-brightgreen)
-![CARLA](https://img.shields.io/badge/Simulator-CARLA__UE5-blue)
+[![Status](https://img.shields.io/badge/Status-Active-brightgreen)](https://github.com/AhmedAbbas01/CARLA2Real-ADAS)
+[![CARLA-UE5](https://img.shields.io/badge/Simulator-CARLA__UE5-blue)](https://carla-ue5.readthedocs.io/en/latest/)
+[![Dataset](https://img.shields.io/badge/Kaggle-Dataset-cyan?logo=kaggle)](https://www.kaggle.com/datasets/ahmedabbas0101/carla2real-adas)
+[![Paper](https://img.shields.io/badge/CARLA2Real-ADAS-Paper?logo=overleaf)](https://www.overleaf.com/project/6a33bf0a6f60235b4edfefdd)
+[![Stefanos](https://img.shields.io/badge/BasedOn-CARLA2Real-lightgrey?logo=github)](https://github.com/stefanos50/CARLA2Real/tree/main)
+
 
 **Authors:** Ahmed M. Abbas, Mohamed Adel  
 **Affiliation:** Information Technology and Computer Science School, Nile University, Giza, Egypt
 
-This project was originated to show the code and expirements done for the paper [Carla2Real-ADAS: A Simulation-to-Real Transfer Framework for Vision-Based ADAS Using Synthetic Data and Object Detection](https://www.overleaf.com/project/6a33bf0a6f60235b4edfefdd) *Link to be Updated* 
+This project was originated to show the code and expirements done for the paper *"Carla2Real-ADAS: A Simulation-to-Real Transfer Framework for Vision-Based ADAS Using Synthetic Data and Object Detection"*
 
 ![Overall pipeline](docs/overall.png)
 
@@ -41,10 +45,16 @@ The following comparison highlights the original CARLA scene alongside the enhan
 ## Repository Structure
 
 - `carla_unreal_engine_5/`: Contains Python scripts for dataset generation, G-buffer extraction, preprocessing, and model inference inside CARLA (built from source in Unreal Engine 5).
-- `Dataset/`: Directory structure housing extracted data such as `BoundingBoxes`, `EPE` buffers, raw `Frames`, `Semantic` segmentations, and final `VisulOutput`. *Not uploaded to this repository*
-- `AWS_Private_EC2.sh`: A helper bash script used to spin up an AWS EC2 instance with AWS SSM port forwarding for running the simulator remotely.
-- `full_pipeline.sh`: A helper bash script used to trigger the whole pipeline assuming the database is already collected. it doesn't require CARLA to run or a graphical connection.
+- `Dataset/`: Contains the extracted data, organized by map and weather condition (e.g., `Town10HD_Opt_ClearNoon` represents the `Town10HD_Opt` map under `ClearNoon` weather).
+  * **Extracted CARLA Data**: Each folder contains `BoundingBoxes`, `Frames`, `GBuffers`, and `SemanticSegmentation`.
+  * **Carla2Real Output**: Each folder contains `Carla2Kitti` folder, representing Carla2Real output in KITTI format.
+  * **TensorRT Models**: Used for converting data to KITTI and Cityscapes formats. 
 
+  *Note: This folder is included in this repository due to size; download it from the [Kaggle dataset page](https://www.kaggle.com/datasets/ahmedabbas0101/carla2real-adas).*
+
+- `AWS_Private_EC2.sh`: A helper bash script used to spin up an AWS EC2 instance with AWS SSM port forwarding for running the simulator remotely.
+- `extract_dataset.sh`: A helper bash script used to extract the dataset from Carla with different weather conditions automatically
+- `full_pipeline.sh`: A helper bash script used to show how to trigger the whole pipeline, assuming the database is already collected, and it doesn't require CARLA to run or a graphical connection.
 
 ## Getting Started
 
