@@ -44,13 +44,14 @@ The following comparison highlights the original CARLA scene alongside the enhan
 
 ## Repository Structure
 
-- `carla_unreal_engine_5/`: Contains Python scripts for dataset generation, G-buffer extraction, preprocessing, and model inference inside CARLA (built from source in Unreal Engine 5).
+- `carla_unreal_engine_5/`: Contains Python scripts for dataset generation based on Carla2Real pipeline (G-buffer extraction and their model inference to enhance the carla images)
+- `fine-tuning`: Contains Python scripts for Finetuning preparation and inference of object detection models (YOLOv8, RT-DETR, Faster R-CNN)
 - `Dataset/`: Contains the extracted data, organized by map and weather condition (e.g., `Town10HD_Opt_ClearNoon` represents the `Town10HD_Opt` map under `ClearNoon` weather).
   * **Extracted CARLA Data**: Each folder contains `BoundingBoxes`, `Frames`, `GBuffers`, and `SemanticSegmentation`.
   * **Carla2Real Output**: Each folder contains `Carla2Kitti` folder, representing Carla2Real output in KITTI format.
   * **TensorRT Models**: Used for converting data to KITTI and Cityscapes formats. 
 
-  *Note: This folder is included in this repository due to size; download it from the [Kaggle dataset page](https://www.kaggle.com/datasets/ahmedabbas0101/carla2real-adas).*
+  *Note: This folder is not included in this repository due to size; download it from the [Kaggle dataset page](https://www.kaggle.com/datasets/ahmedabbas0101/carla2real-adas).*
 
 - `AWS_Private_EC2.sh`: A helper bash script used to spin up an AWS EC2 instance with AWS SSM port forwarding for running the simulator remotely.
 - `extract_dataset.sh`: A helper bash script used to extract the dataset from Carla with different weather conditions automatically
@@ -59,6 +60,8 @@ The following comparison highlights the original CARLA scene alongside the enhan
 ## Getting Started
 
 Please refer to the internal README at [`carla_unreal_engine_5/README.md`](carla_unreal_engine_5/README.md) for detailed instructions on launching the simulator, data generation, preprocessing, running the photorealistic inference, and visualizing the outputs.
+
+Please refer to the internal README at [`fine-tuning/README.md`](fine-tuning/README.md) for detailed instructions on Fine-Tuning the object detection models and the rest of our pipeline.
 
 ## License
 
