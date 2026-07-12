@@ -25,7 +25,7 @@ python3 carla_epe_ue5.py
 
 > ⚠️ **Warning**: The script will automatically input the high-res command and synchronize it with other data that can be exported via the CARLA Python API. **After executing the script, simply focus the CARLA simulator window with your mouse to proceed.**
 
-Once the data generation is complete, Open a new terminal into the project, and run the following command to convert the data into a format compatible with the photorealism enhancement:
+Once the data generation is complete, Open a new terminal into the project, and run the following command to convert the collected data into NPZ files of both [GBuffers](#GBuffers-npz-files) and [Semantic Segmentations](#semantic-segmentation-npz-files). Those will be used by the photorealism enhancer:
 
 ```bash
 conda activate carla
@@ -33,23 +33,59 @@ cd ~/workset/CARLA2Real-ADAS/carla_unreal_engine_5
 python3 epe_preprocess.py --input_path $PWD/../Dataset/ --output_path $PWD/../Dataset/ --gbuffers "['SceneColor','SceneDepth','WorldNormal','Metallic','Specular','Roughness','BaseColor','SubsurfaceColor']" --gbuffers_grayscale "['SceneDepth','Metallic','Specular','Roughness']"
 ```
 
-The final step is to enhance the data by running inference with the model. Make sure to download the [ONNX model](https://drive.google.com/drive/folders/1NNGdwxH5anAPbvaM-0Mm3cq8PexjtGtF?usp=drive_link). Then open a new terminal into the project and run the following command to generate the enhanced images out of the collected data:
+The final step is to enhance the data by running inference with the model. You may use any of [CARLA2Real models](https://drive.google.com/drive/folders/1WF1RCE-AUWFXdZdWUt3wMbrbBCHrTVCX) (The scripts supports both ONNX and TRT models. Also we've uploaded the models as part of our kaggle dataset). Then open a new terminal into the project and run the following command to generate the enhanced images out of the collected data:
 
 ```bash
 conda activate carla
 cd ~/workset/CARLA2Real-ADAS/carla_unreal_engine_5
 mkdir ../Dataset/EnhancedPhotos
-python3 test.py --model_onnx ~/Downloads/carla2cityscapes-360000.onnx --dataset_directory $PWD/../Dataset/CarlaUE5-EPE --out_path $PWD/../Dataset/EnhancedPhotos
+python3 infere_onnx.py --model_onnx ../Dataset/models/carla2cityscapes-360000.onnx --dataset_directory $PWD/../Dataset/CarlaUE5-EPE --out_path $PWD/../Dataset/EnhancedPhotos
+# OR
+python3 infere_trt.py --model_trt ../Dataset/models/carla2cityscapes-360000.trt --dataset_directory $PWD/../Dataset/CarlaUE5-EPE --out_path $PWD/../Dataset/EnhancedPhotos
 ```
-
-> ⚠️ **Warning**: ONNX Runtime library will require a large amount of VRAM. If you have a limited amount of GPU VRAM then the inference should be performed with the PyTorch code as described in the [CARLA2Real readme](https://github.com/stefanos50/CARLA2Real).
 
 You can then visualize the collected data on top of the enhanced images. Open a new terminal into the project and run the following command:
 
 ```bash
-conda deactivate && conda deactivate
-source /opt/pytorch/bin/activate
+conda activate carla
 cd ~/workset/CARLA2Real-ADAS/carla_unreal_engine_5
 python3 visualize_bboxes.py --frames_dir $PWD/../Dataset/EnhancedPhotos --bboxes_dir $PWD/../Dataset/BoundingBoxes/ --output_dir $PWD/../Dataset/VisulOutput/
 ```
 The script saves the images into the output folder that contains the bounding boxes on top of the enhanced images and titled with object type, showing the object distances as well.
+
+---
+
+#### GBuffers npz files:
+The total number of channels in the NPZ file will be: 3 + 1 + 3 + 1 + 1 + 1 + 3 + 3 + 1 + 1 = 18 channels
+- SceneColor - RGB color information
+- SceneDepth - Depth map (grayscale, single channel)
+- WorldNormal - World space normals (RGB)
+- Metallic - Metallic property (grayscale, single channel)
+- Specular - Specular property (grayscale, single channel)
+- Roughness - Surface roughness (grayscale, single channel)
+- BaseColor - Base color of materials (RGB)
+- SubsurfaceColor - Subsurface scattering color (RGB)
+- SSAO - Screen Space Ambient Occlusion (random noise, single channel)
+- Semantic ID - Raw semantic segmentation class ID (single channel)
+
+> The grayscale buffers (Depth, Metallic, Specular, Roughness) are expanded to have a single channel dimension for consistency.
+
+
+#### Semantic Segmentation npz files:
+One-hot encoded semantic segmentation labels
+A single numpy array called label_map with shape (height, width, 12) - containing 12 channels of binary semantic segmentation masks.
+
+The 12 semantic classes (in order):
+
+0. Sky
+1. Road (combination of multiple road-related classes)
+2. Vehicle (combination of multiple vehicle types)
+3. Terrain
+4. Vegetation
+5. Person (combination of pedestrian types)
+6. Infrastructure
+7. Traffic Light
+8. Traffic Sign
+9. Ego (ego vehicle, combination of types)
+10. Building (combination of building types)
+11. Unlabeled (combination of unlabeled categories)
