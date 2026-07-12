@@ -39,7 +39,7 @@ from PIL import Image
 import yaml
 
 # Default relative directory names inside each dataset sequence
-INPUT_FRAMES_DIR = "Carla2Kitti"
+DEFAULT_DESIRED_MODEL = "Carla2Kitti"
 INPUT_BBOX_DIR = "BoundingBoxes"
 DEFAULT_OUTPUT_DIR = "yolo_kitti_dataset"
 CLASS_MAPPING = {
@@ -54,7 +54,7 @@ CLASS_MAPPING = {
 }
 
 
-def collect_pairs(parent_dir: str, frames_dir_name: str = INPUT_FRAMES_DIR,
+def collect_pairs(parent_dir: str, frames_dir_name: str,
                   bbox_dir_name: str = INPUT_BBOX_DIR) -> List[Dict]:
     """Traverse immediate subfolders under parent_dir and collect matching
     image/json pairs. Each sequence folder is expected to contain two
@@ -183,9 +183,10 @@ def main():
     parser = argparse.ArgumentParser(description="Prepare YOLO dataset from extracted frames and bboxes.")
     parser.add_argument("parent_dir", help="Parent directory containing sequence subfolders")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Output yolo dataset directory")
+    parser.add_argument("--desired-model", default=DEFAULT_DESIRED_MODEL, help="Desired CARLA2Real enhanced images model")
     args = parser.parse_args()
 
-    all_data_pairs = collect_pairs(args.parent_dir)
+    all_data_pairs = collect_pairs(args.parent_dir, args.desired_model)
     print(f"Total valid image/json pairs found across all folders: {len(all_data_pairs)}")
 
     # Perform a 3-way split (70% train, 15% val, 15% test)
