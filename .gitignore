@@ -1,8 +1,12 @@
 onnxruntime_profile__*.json
 Dataset/
 __pycache__
-fine-tuning/yolo_*_dataset
 .vscode
+fine-tuning/yolo_*_dataset
 fine-tuning/*_kitti_dataset/
 fine-tuning/*_cityscapes_dataset/
 fine-tuning/.ipynb_checkpoints/
+fine-tuning/runs/faster_rcnn/
+fine-tuning/runs/rtdetr-l_detect/
+fine-tuning/runs/yolov8n_detect/
+fine-tuning/runs/ml-depth-pro/
