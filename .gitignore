@@ -3,3 +3,6 @@ Dataset/
 __pycache__
 fine-tuning/yolo_*_dataset
 .vscode
+fine-tuning/*_kitti_dataset/
+fine-tuning/*_cityscapes_dataset/
+fine-tuning/.ipynb_checkpoints/

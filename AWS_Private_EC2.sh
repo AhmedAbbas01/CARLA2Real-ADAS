@@ -52,12 +52,19 @@ killall session-manager-plugin
 # ssh port
 sleep 2
 aws ssm start-session --target "$INSTANCE_ID" --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["22"], "localPortNumber":["8443"]}' --region eu-west-1 &
+
 # dcv port
 sleep 2
 aws ssm start-session --target "$INSTANCE_ID" --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["8443"], "localPortNumber":["8444"]}' --region eu-west-1 &
+
+# jupyter port
+sleep 2
+aws ssm start-session --target "$INSTANCE_ID" --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["8888"], "localPortNumber":["8445"]}' --region eu-west-1 &
+
 # # carla rpc port
 # sleep 2
 # aws ssm start-session --target "$INSTANCE_ID" --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["2000"], "localPortNumber":["2000"]}' --region eu-west-1 &
+
 # # carla streaming port
 # sleep 2
 # aws ssm start-session --target "$INSTANCE_ID" --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["2001"], "localPortNumber":["2001"]}' --region eu-west-1 &
