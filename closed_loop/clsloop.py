@@ -65,7 +65,8 @@ class ADASController:
                  warning_distance=15.0,
                  brake_distance=7.0,
                  lane_width=3.5,
-                 visualize=False):
+                 visualize=False,
+                 use_depth_pro=True):
         """
         Initializes the ADASController with configuration parameters.
 
@@ -91,6 +92,8 @@ class ADASController:
         :type lane_width: float
         :param visualize: Whether to display the camera feed and YOLO bounding boxes.
         :type visualize: bool
+        :param use_depth_pro: Enable or disable Depth Pro inference.
+        :type use_depth_pro: bool
         """
         self.host = host
         self.port = port
@@ -103,6 +106,7 @@ class ADASController:
         self.brake_distance = brake_distance
         self.lane_width = lane_width
         self.visualize = visualize
+        self.use_depth_pro = use_depth_pro
 
         # Classes that can trigger braking
         self.danger_classes = {"Car", "Truck", "Bus", "Motorcycle", "Bicycle", "Pedestrians"}
@@ -130,19 +134,22 @@ class ADASController:
             logger.error("Failed to load YOLO model: %s", e)
             raise RuntimeError(f"Model loading failed: {e}")
             
-        logger.info(f"Loading Depth Pro model from {self.depth_model_path}/checkpoints/depth_pro.pt ...")
-        try:
-            # Temporarily change directory for finding depth_pro weights
-            with chdir(self.depth_model_path):
-                self.depth_model, self.depth_transform = depth_pro.create_model_and_transforms()
-                self.depth_model.half()
-                self.depth_model.eval()
-                if torch.cuda.is_available():
-                    self.depth_model = self.depth_model.to("cuda")
-                logger.info("Depth Pro model loaded successfully.")
-        except Exception as e:
-            logger.error("Failed to load Depth Pro model: %s", e)
-            raise RuntimeError(f"Depth Pro loading failed: {e}")
+        if self.use_depth_pro:
+            logger.info(f"Loading Depth Pro model from {self.depth_model_path}/checkpoints/depth_pro.pt ...")
+            try:
+                # Temporarily change directory for finding depth_pro weights
+                with chdir(self.depth_model_path):
+                    self.depth_model, self.depth_transform = depth_pro.create_model_and_transforms()
+                    self.depth_model.half()
+                    self.depth_model.eval()
+                    if torch.cuda.is_available():
+                        self.depth_model = self.depth_model.to("cuda")
+                    logger.info("Depth Pro model loaded successfully.")
+            except Exception as e:
+                logger.error("Failed to load Depth Pro model: %s", e)
+                raise RuntimeError(f"Depth Pro loading failed: {e}")
+        else:
+            logger.info("Depth Pro inference is disabled.")
 
     def connect_carla(self):
         """
@@ -327,25 +334,28 @@ class ADASController:
             array = array.reshape((image.height, image.width, 4))
             frame = array[:, :, :3]
 
-            # Depth Pro Inference
-            try:
-                # Prepare image for depth_pro
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(rgb_frame)
-                input_tensor = self.depth_transform(pil_img)
-                if torch.cuda.is_available():
-                    input_tensor = input_tensor.to("cuda")
-                input_tensor = input_tensor.half()
-                
-                # Assuming 90 FOV for width 1280 => focal length f_px = 640
-                with torch.no_grad():
-                    f_px_tensor = torch.tensor(640.0, device=input_tensor.device, dtype=input_tensor.dtype)
-                    prediction = self.depth_model.infer(input_tensor, f_px=f_px_tensor)
-                    depth_map = prediction["depth"].cpu().numpy()
-                    if depth_map.shape != (image.height, image.width):
-                        depth_map = cv2.resize(depth_map, (image.width, image.height), interpolation=cv2.INTER_NEAREST)
-            except Exception as e:
-                logger.error("Depth Pro inference failed: %s", e)
+            if self.use_depth_pro and self.depth_model is not None:
+                # Depth Pro Inference
+                try:
+                    # Prepare image for depth_pro
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pil_img = Image.fromarray(rgb_frame)
+                    input_tensor = self.depth_transform(pil_img)
+                    if torch.cuda.is_available():
+                        input_tensor = input_tensor.to("cuda")
+                    input_tensor = input_tensor.half()
+                    
+                    # Assuming 90 FOV for width 1280 => focal length f_px = 640
+                    with torch.no_grad():
+                        f_px_tensor = torch.tensor(640.0, device=input_tensor.device, dtype=input_tensor.dtype)
+                        prediction = self.depth_model.infer(input_tensor, f_px=f_px_tensor)
+                        depth_map = prediction["depth"].cpu().numpy()
+                        if depth_map.shape != (image.height, image.width):
+                            depth_map = cv2.resize(depth_map, (image.width, image.height), interpolation=cv2.INTER_NEAREST)
+                except Exception as e:
+                    logger.error("Depth Pro inference failed: %s", e)
+                    depth_map = np.ones((image.height, image.width)) * 100.0  # Safe fallback distance
+            else:
                 depth_map = np.ones((image.height, image.width)) * 100.0  # Safe fallback distance
 
             # YOLO Inference
@@ -515,6 +525,9 @@ def main():
     parser.add_argument("--lane-width", type=float, default=2, help="Physical width of the ego lane in meters (default: 2)")
     parser.add_argument("--visualize", action="store_true", help="Enable visualization of the YOLO detections window")
     parser.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], help="Set the logging level (default: INFO)")
+    parser.add_argument("--use-depth-pro", action="store_true", help="Enable Depth Pro model inference")
+    parser.add_argument("--no-depth-pro", dest="use_depth_pro", action="store_false", help="Disable Depth Pro model inference")
+    parser.set_defaults(use_depth_pro=True)
 
     args = parser.parse_args()
 
@@ -532,7 +545,8 @@ def main():
         warning_distance=args.warning_distance,
         brake_distance=args.brake_distance,
         lane_width=args.lane_width,
-        visualize=args.visualize
+        visualize=args.visualize,
+        use_depth_pro=args.use_depth_pro
     )
     adas_controller.run()
 
