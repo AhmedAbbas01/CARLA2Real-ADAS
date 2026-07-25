@@ -1,402 +1,400 @@
-import carla
-import cv2
-import numpy as np
+"""
+Closed-Loop ADAS script for CARLA.
+This script controls a vehicle using YOLO-based object detection.
+"""
+
+import argparse
+import logging
+import sys
 import time
-from ultralytics import YOLO
-
 
 # ============================================================
-# CONFIG
+# CONFIGURATION & LOGGING
 # ============================================================
 
-CARLA_HOST = "localhost"
-CARLA_PORT = 2000
-
-MODEL_PATH = "yolov8n.pt"
-
-CONF_THRESHOLD = 0.40
-IMGSZ = 1280
-
-# Classes that can trigger braking
-DANGER_CLASSES = {
-    "Car",
-    "Truck",
-    "Bus",
-    "Motorcycle",
-    "Bicycle",
-    "Pedestrians",
-}
-
-# Normal driving
-CRUISE_THROTTLE = 0.35
-
-# Bounding-box based braking thresholds.
-# Larger box height = object is probably closer.
-WARNING_BOX_RATIO = 0.25
-BRAKE_BOX_RATIO = 0.40
-
-# Only consider objects roughly in our driving lane.
-LANE_MIN_X = 0.30
-LANE_MAX_X = 0.70
-
-
-# ============================================================
-# LOAD MODEL
-# ============================================================
-
-print("Loading YOLO model...")
-
-model = YOLO(MODEL_PATH)
-
-print("Model loaded.")
-
-
-# ============================================================
-# CONNECT TO CARLA
-# ============================================================
-
-client = carla.Client(CARLA_HOST, CARLA_PORT)
-client.set_timeout(20.0)
-
-world = client.get_world()
-blueprints = world.get_blueprint_library()
-
-
-# ============================================================
-# SPAWN VEHICLE
-# ============================================================
-
-vehicle_bps = blueprints.filter("vehicle.*")
-
-if not vehicle_bps:
-    raise RuntimeError("No vehicle blueprints available in this CARLA world.")
-
-vehicle_bp = np.random.choice(vehicle_bps)
-
-print(f"Using vehicle: {vehicle_bp.id}")
-
-
-spawn_points = world.get_map().get_spawn_points()
-
-vehicle = world.spawn_actor(
-    vehicle_bp,
-    np.random.choice(spawn_points)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
-
-print("Vehicle spawned.")
-
-
-# ============================================================
-# IMPORTANT:
-# We control throttle/brake ourselves.
-# ============================================================
-
-vehicle.set_autopilot(False)
-
-
-# ============================================================
-# CAMERA
-# ============================================================
-
-camera_bp = blueprints.find("sensor.camera.rgb")
-
-camera_bp.set_attribute("image_size_x", "1280")
-camera_bp.set_attribute("image_size_y", "720")
-camera_bp.set_attribute("fov", "90")
-
-camera_transform = carla.Transform(
-    carla.Location(x=1.5, z=2.4)
-)
-
-camera = world.spawn_actor(
-    camera_bp,
-    camera_transform,
-    attach_to=vehicle
-)
-
-print("Camera attached.")
-
-
-# ============================================================
-# ADAS DECISION
-# ============================================================
-
-def calculate_control(frame, result):
-
-    height, width = frame.shape[:2]
-
-    danger_level = 0
-
-    closest_object = None
-    largest_ratio = 0.0
-
-
-    # --------------------------------------------------------
-    # Process detections
-    # --------------------------------------------------------
-
-    for box in result.boxes:
-
-        confidence = float(box.conf[0])
-
-        if confidence < CONF_THRESHOLD:
-            continue
-
-        cls_id = int(box.cls[0])
-        class_name = model.names[cls_id]
-
-        if class_name not in DANGER_CLASSES:
-            continue
-
-
-        # Bounding box
-        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-
-        box_width = x2 - x1
-        box_height = y2 - y1
-
-
-        # ----------------------------------------------------
-        # Object horizontal position
-        # ----------------------------------------------------
-
-        center_x = (x1 + x2) / 2
-
-        normalized_center_x = center_x / width
-
-
-        # Ignore objects outside approximate ego lane
-        if not (
-            LANE_MIN_X
-            <= normalized_center_x
-            <= LANE_MAX_X
-        ):
-            continue
-
-
-        # ----------------------------------------------------
-        # Estimate closeness using bbox height
-        # ----------------------------------------------------
-
-        box_ratio = box_height / height
-
-
-        if box_ratio > largest_ratio:
-
-            largest_ratio = box_ratio
-
-            closest_object = {
-                "class": class_name,
-                "confidence": confidence,
-                "ratio": box_ratio,
-                "box": (x1, y1, x2, y2)
-            }
-
-
-    # ========================================================
-    # ADAS LOGIC
-    # ========================================================
-
-    if largest_ratio >= BRAKE_BOX_RATIO:
-
-        # Emergency
-        throttle = 0.0
-        brake = 1.0
-
-        danger_level = 2
-
-
-    elif largest_ratio >= WARNING_BOX_RATIO:
-
-        # Slow down
-        throttle = 0.0
-        brake = 0.40
-
-        danger_level = 1
-
-
-    else:
-
-        # Safe
-        throttle = CRUISE_THROTTLE
-        brake = 0.0
-
-        danger_level = 0
-
-
-    return throttle, brake, danger_level, closest_object
-
-
-# ============================================================
-# CAMERA CALLBACK
-# ============================================================
-
-def process_image(image):
-
-    # CARLA BGRA
-    array = np.frombuffer(
-        image.raw_data,
-        dtype=np.uint8
-    )
-
-    array = array.reshape(
-        (image.height, image.width, 4)
-    )
-
-
-    # Convert BGRA -> BGR
-    frame = array[:, :, :3]
-
-
-    # ========================================================
-    # YOLO INFERENCE
-    # ========================================================
-
-    results = model.predict(
-        frame,
-        imgsz=IMGSZ,
-        conf=CONF_THRESHOLD,
-        verbose=False
-    )
-
-    result = results[0]
-
-
-    # ========================================================
-    # ADAS
-    # ========================================================
-
-    throttle, brake, danger, obj = calculate_control(
-        frame,
-        result
-    )
-
-
-    # ========================================================
-    # APPLY CONTROL TO CARLA
-    # ========================================================
-
-    control = carla.VehicleControl()
-
-    control.throttle = throttle
-    control.brake = brake
-
-    # Straight driving for this test
-    control.steer = 0.0
-
-    vehicle.apply_control(control)
-
-
-    # ========================================================
-    # TERMINAL OUTPUT
-    # ========================================================
-
-    if obj:
-
-        print(
-            f"{obj['class']:12s} | "
-            f"conf={obj['confidence']:.2f} | "
-            f"bbox_ratio={obj['ratio']:.3f} | "
-            f"Throttle={throttle:.2f} "
-            f"Brake={brake:.2f}"
-        )
-
-    else:
-
-        print(
-            f"No obstacle | "
-            f"Throttle={throttle:.2f} "
-            f"Brake={brake:.2f}"
-        )
-
-
-    # ========================================================
-    # VISUALIZATION
-    # ========================================================
-
-    annotated = result.plot()
-
-
-    if danger == 2:
-
-        text = "EMERGENCY BRAKE"
-
-    elif danger == 1:
-
-        text = "WARNING / BRAKING"
-
-    else:
-
-        text = "SAFE"
-
-
-    cv2.putText(
-        annotated,
-        text,
-        (40, 60),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1.5,
-        (0, 0, 255) if danger else (0, 255, 0),
-        3
-    )
-
-
-    cv2.putText(
-        annotated,
-        f"Throttle: {throttle:.2f}  Brake: {brake:.2f}",
-        (40, 110),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.9,
-        (255, 255, 255),
-        2
-    )
-
-
-    # cv2.imshow(
-    #     "YOLO Closed-Loop ADAS",
-    #     annotated
-    # )
-
-
-    # if cv2.waitKey(1) & 0xFF == ord("q"):
-    #     camera.stop()
-
-
-# ============================================================
-# START
-# ============================================================
-
-camera.listen(process_image)
-
-print()
-print("====================================")
-print("Closed-loop ADAS running")
-print("====================================")
-print("Press Q to stop.")
-
-
-# ============================================================
-# KEEP PROGRAM ALIVE
-# ============================================================
+logger = logging.getLogger("ADAS_Controller")
+
+# Graceful imports with missing dependency handling
+try:
+    import carla
+except ImportError:
+    logger.critical("CARLA module not found. Please ensure the CARLA PythonAPI is installed.")
+    sys.exit(1)
 
 try:
+    import cv2
+    import numpy as np
+except ImportError as e:
+    logger.critical("Missing required data processing library: %s", e)
+    sys.exit(1)
 
-    while True:
-        time.sleep(0.1)
+try:
+    from ultralytics import YOLO
+except ImportError:
+    logger.critical("ultralytics module not found. Please install ultralytics for YOLO.")
+    sys.exit(1)
 
 
-except KeyboardInterrupt:
+class ADASController:
+    """
+    A class to encapsulate the ADAS logic and CARLA vehicle control loops.
+    """
 
-    print("\nStopping...")
+    def __init__(self,
+                 host="localhost",
+                 port=2000,
+                 model_path="yolov8n.pt",
+                 conf_threshold=0.40,
+                 img_sz=1280,
+                 cruise_throttle=0.35,
+                 warning_box_ratio=0.25,
+                 brake_box_ratio=0.40,
+                 lane_min_x=0.30,
+                 lane_max_x=0.70):
+        """
+        Initializes the ADASController with configuration parameters.
+
+        :param host: CARLA server host address.
+        :type host: str
+        :param port: CARLA server port.
+        :type port: int
+        :param model_path: Path to the YOLO weights file.
+        :type model_path: str
+        :param conf_threshold: Minimum confidence threshold for YOLO detections.
+        :type conf_threshold: float
+        :param img_sz: Image size for YOLO inference.
+        :type img_sz: int
+        :param cruise_throttle: Default throttle value for safe driving.
+        :type cruise_throttle: float
+        :param warning_box_ratio: Bounding box height ratio to trigger a warning/slow down.
+        :type warning_box_ratio: float
+        :param brake_box_ratio: Bounding box height ratio to trigger emergency braking.
+        :type brake_box_ratio: float
+        :param lane_min_x: Minimum normalized X coordinate to consider an object in the driving lane.
+        :type lane_min_x: float
+        :param lane_max_x: Maximum normalized X coordinate to consider an object in the driving lane.
+        :type lane_max_x: float
+        """
+        self.host = host
+        self.port = port
+        self.model_path = model_path
+        self.conf_threshold = conf_threshold
+        self.img_sz = img_sz
+        self.cruise_throttle = cruise_throttle
+        self.warning_box_ratio = warning_box_ratio
+        self.brake_box_ratio = brake_box_ratio
+        self.lane_min_x = lane_min_x
+        self.lane_max_x = lane_max_x
+
+        # Classes that can trigger braking
+        self.danger_classes = {"Car", "Truck", "Bus", "Motorcycle", "Bicycle", "Pedestrians"}
+
+        # CARLA actors and ML components
+        self.client = None
+        self.world = None
+        self.vehicle = None
+        self.camera = None
+        self.model = None
+
+    def load_model(self):
+        """
+        Loads the YOLO model for object detection.
+
+        :raises RuntimeError: If the model fails to load or the file is missing.
+        """
+        logger.info("Loading YOLO model from %s...", self.model_path)
+        try:
+            self.model = YOLO(self.model_path)
+            logger.info("YOLO model loaded successfully.")
+        except Exception as e:
+            logger.error("Failed to load YOLO model: %s", e)
+            raise RuntimeError(f"Model loading failed: {e}")
+
+    def connect_carla(self):
+        """
+        Connects to the CARLA simulator and initializes the world object.
+
+        :raises RuntimeError: If the connection to the CARLA server times out or fails.
+        """
+        logger.info("Connecting to CARLA server at %s:%s...", self.host, self.port)
+        try:
+            self.client = carla.Client(self.host, self.port)
+            self.client.set_timeout(20.0)
+            self.world = self.client.get_world()
+            logger.info("Connected to CARLA successfully.")
+        except Exception as e:
+            logger.error("Failed to connect to CARLA: %s", e)
+            raise RuntimeError(f"CARLA connection failed: {e}")
+
+    def spawn_actors(self):
+        """
+        Spawns the ego vehicle and attaches the RGB camera to it.
+
+        :raises RuntimeError: If no vehicle blueprints or spawn points are available on the map.
+        """
+        blueprints = self.world.get_blueprint_library()
+        vehicle_bps = blueprints.filter("vehicle.*")
+
+        if not vehicle_bps:
+            logger.error("No vehicle blueprints available in this CARLA world.")
+            raise RuntimeError("No vehicle blueprints available.")
+
+        vehicle_bp = np.random.choice(vehicle_bps)
+        logger.info("Selected vehicle blueprint: %s", vehicle_bp.id)
+
+        spawn_points = self.world.get_map().get_spawn_points()
+        if not spawn_points:
+            logger.error("No spawn points found on the current map.")
+            raise RuntimeError("No spawn points available.")
+
+        # Spawn vehicle
+        spawn_point = np.random.choice(spawn_points)
+        self.vehicle = self.world.spawn_actor(vehicle_bp, spawn_point)
+        logger.info("Vehicle spawned successfully at %s.", spawn_point.location)
+
+        self.vehicle.set_autopilot(False)
+
+        # Setup camera
+        camera_bp = blueprints.find("sensor.camera.rgb")
+        camera_bp.set_attribute("image_size_x", "1280")
+        camera_bp.set_attribute("image_size_y", "720")
+        camera_bp.set_attribute("fov", "90")
+
+        camera_transform = carla.Transform(carla.Location(x=1.5, z=2.4))
+        self.camera = self.world.spawn_actor(
+            camera_bp,
+            camera_transform,
+            attach_to=self.vehicle
+        )
+        logger.info("RGB Camera attached to the vehicle.")
+
+    def calculate_control(self, frame, result):
+        """
+        Calculates the vehicle control (throttle and brake) based on YOLO detections.
+
+        :param frame: The current RGB image frame from the camera.
+        :type frame: numpy.ndarray
+        :param result: The YOLO model inference result containing bounding boxes.
+        :type result: ultralytics.engine.results.Results
+        :return: A tuple containing throttle, brake, danger level, and closest object dictionary.
+        :rtype: tuple(float, float, int, dict or None)
+        """
+        height, width = frame.shape[:2]
+        danger_level = 0
+        closest_object = None
+        largest_ratio = 0.0
+
+        for box in result.boxes:
+            confidence = float(box.conf[0])
+            if confidence < self.conf_threshold:
+                continue
+
+            cls_id = int(box.cls[0])
+            class_name = self.model.names[cls_id]
+
+            if class_name not in self.danger_classes:
+                continue
+
+            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+            box_height = y2 - y1
+
+            center_x = (x1 + x2) / 2
+            normalized_center_x = center_x / width
+
+            # Ignore objects outside approximate ego lane
+            if not (self.lane_min_x <= normalized_center_x <= self.lane_max_x):
+                continue
+
+            box_ratio = box_height / height
+
+            if box_ratio > largest_ratio:
+                largest_ratio = box_ratio
+                closest_object = {
+                    "class": class_name,
+                    "confidence": confidence,
+                    "ratio": box_ratio,
+                    "box": (x1, y1, x2, y2)
+                }
+
+        if largest_ratio >= self.brake_box_ratio:
+            throttle, brake, danger_level = 0.0, 1.0, 2
+        elif largest_ratio >= self.warning_box_ratio:
+            throttle, brake, danger_level = 0.0, 0.40, 1
+        else:
+            throttle, brake, danger_level = self.cruise_throttle, 0.0, 0
+
+        return throttle, brake, danger_level, closest_object
+
+    def process_image(self, image):
+        """
+        Callback function to process incoming camera frames and apply control.
+
+        :param image: The raw image data from the CARLA camera sensor.
+        :type image: carla.Image
+        """
+        try:
+            # Convert CARLA BGRA to BGR
+            array = np.frombuffer(image.raw_data, dtype=np.uint8)
+            array = array.reshape((image.height, image.width, 4))
+            frame = array[:, :, :3]
+
+            # YOLO Inference
+            results = self.model.predict(
+                frame,
+                imgsz=self.img_sz,
+                conf=self.conf_threshold,
+                verbose=False
+            )
+            result = results[0]
+
+            throttle, brake, danger, obj = self.calculate_control(frame, result)
+
+            # Apply Control
+            if self.vehicle and self.vehicle.is_alive:
+                control = carla.VehicleControl()
+                control.throttle = throttle
+                control.brake = brake
+                control.steer = 0.0
+                self.vehicle.apply_control(control)
+
+            # Log results (Using DEBUG level to avoid terminal spam; change log level if desired)
+            if obj:
+                logger.debug(
+                    "%s | conf=%.2f | bbox_ratio=%.3f | Throttle=%.2f Brake=%.2f",
+                    obj['class'], obj['confidence'], obj['ratio'], throttle, brake
+                )
+            else:
+                logger.debug("No obstacle | Throttle=%.2f Brake=%.2f", throttle, brake)
+
+            self._visualize(result, danger, throttle, brake)
+
+        except Exception as e:
+            logger.error("Error occurred during image processing: %s", e, exc_info=True)
+
+    def _visualize(self, result, danger, throttle, brake):
+        """
+        Annotates the frame with detection boxes and vehicle telemetry logic.
+        
+        :param result: The YOLO model inference result.
+        :type result: ultralytics.engine.results.Results
+        :param danger: Computed danger level.
+        :type danger: int
+        :param throttle: Current throttle value.
+        :type throttle: float
+        :param brake: Current brake value.
+        :type brake: float
+        """
+        annotated = result.plot()
+
+        if danger == 2:
+            text = "EMERGENCY BRAKE"
+            color = (0, 0, 255)
+        elif danger == 1:
+            text = "WARNING / BRAKING"
+            color = (0, 165, 255)  # Orange
+        else:
+            text = "SAFE"
+            color = (0, 255, 0)
+
+        cv2.putText(annotated, text, (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 3)
+        cv2.putText(
+            annotated,
+            f"Throttle: {throttle:.2f}  Brake: {brake:.2f}",
+            (40, 110),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (255, 255, 255),
+            2
+        )
+
+        # Uncomment to view cv2 stream if not running headlessly
+        # cv2.imshow("YOLO Closed-Loop ADAS", annotated)
+        # cv2.waitKey(1)
+
+    def run(self):
+        """
+        Sets up the environment and starts the ADAS control loop.
+        """
+        try:
+            self.load_model()
+            self.connect_carla()
+            self.spawn_actors()
+
+            logger.info("Starting camera listener...")
+            self.camera.listen(self.process_image)
+
+            logger.info("====================================")
+            logger.info("Closed-loop ADAS running. Press Ctrl+C to stop.")
+            logger.info("====================================")
+
+            while True:
+                time.sleep(0.1)
+
+        except KeyboardInterrupt:
+            logger.info("Interrupted by user. Stopping...")
+        except Exception as e:
+            logger.error("An unexpected error occurred in run loop: %s", e, exc_info=True)
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """
+        Stops sensors and destroys all spawned CARLA actors to clean up the simulation.
+        """
+        logger.info("Cleaning up CARLA actors...")
+        if self.camera and self.camera.is_alive:
+            self.camera.stop()
+            self.camera.destroy()
+            logger.info("Camera destroyed.")
+
+        if self.vehicle and self.vehicle.is_alive:
+            self.vehicle.destroy()
+            logger.info("Vehicle destroyed.")
+
+        cv2.destroyAllWindows()
+        logger.info("Cleanup finished.")
 
 
-finally:
+def main():
+    """
+    Main entry point for the closed loop script.
+    """
+    parser = argparse.ArgumentParser(description="Closed-Loop ADAS script for CARLA.")
+    parser.add_argument("--host", type=str, default="localhost", help="CARLA server host address (default: localhost)")
+    parser.add_argument("--port", type=int, default=2000, help="CARLA server port (default: 2000)")
+    parser.add_argument("--model-path", type=str, default="yolov8n.pt", help="Path to the YOLO weights file (default: yolov8n.pt)")
+    parser.add_argument("--conf-threshold", type=float, default=0.40, help="Minimum confidence threshold for YOLO detections (default: 0.40)")
+    parser.add_argument("--img-sz", type=int, default=1280, help="Image size for YOLO inference (default: 1280)")
+    parser.add_argument("--cruise-throttle", type=float, default=0.35, help="Default throttle value for safe driving (default: 0.35)")
+    parser.add_argument("--warning-box-ratio", type=float, default=0.25, help="Bounding box height ratio to trigger a warning/slow down (default: 0.25)")
+    parser.add_argument("--brake-box-ratio", type=float, default=0.40, help="Bounding box height ratio to trigger emergency braking (default: 0.40)")
+    parser.add_argument("--lane-min-x", type=float, default=0.30, help="Minimum normalized X coordinate to consider an object in the driving lane (default: 0.30)")
+    parser.add_argument("--lane-max-x", type=float, default=0.70, help="Maximum normalized X coordinate to consider an object in the driving lane (default: 0.70)")
+    parser.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], help="Set the logging level (default: INFO)")
 
-    camera.stop()
+    args = parser.parse_args()
 
-    camera.destroy()
-    vehicle.destroy()
+    # Update logging level based on arguments
+    logger.setLevel(getattr(logging, args.log_level.upper()))
 
-    cv2.destroyAllWindows()
+    adas_controller = ADASController(
+        host=args.host,
+        port=args.port,
+        model_path=args.model_path,
+        conf_threshold=args.conf_threshold,
+        img_sz=args.img_sz,
+        cruise_throttle=args.cruise_throttle,
+        warning_box_ratio=args.warning_box_ratio,
+        brake_box_ratio=args.brake_box_ratio,
+        lane_min_x=args.lane_min_x,
+        lane_max_x=args.lane_max_x
+    )
+    adas_controller.run()
 
-    print("Cleaned up.")
+
+if __name__ == "__main__":
+    main()
