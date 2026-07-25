@@ -148,7 +148,8 @@ class ADASController:
             logger.error("No vehicle blueprints available in this CARLA world.")
             raise RuntimeError("No vehicle blueprints available.")
 
-        vehicle_bp = np.random.choice(vehicle_bps)
+        # vehicle_bp = np.random.choice(vehicle_bps)
+        vehicle_bp = blueprints.find("vehicle.ue4.chevrolet.impala")
         logger.info("Selected vehicle blueprint: %s", vehicle_bp.id)
 
         spawn_points = self.world.get_map().get_spawn_points()
@@ -234,6 +235,43 @@ class ADASController:
 
         return throttle, brake, danger_level, closest_object
 
+    def calculate_steering(self):
+        """
+        Calculates the steering angle to keep the vehicle in the center of its lane.
+
+        :return: Steering command in [-1.0, 1.0]
+        :rtype: float
+        """
+        if not self.vehicle or not self.world:
+            return 0.0
+            
+        vehicle_transform = self.vehicle.get_transform()
+        vehicle_location = vehicle_transform.location
+        waypoint = self.world.get_map().get_waypoint(vehicle_location, project_to_road=True, lane_type=carla.LaneType.Driving)
+        
+        # Look ahead by 5 meters to target the upcoming path
+        next_wps = waypoint.next(5.0)
+        if not next_wps:
+            return 0.0
+            
+        target_loc = next_wps[0].transform.location
+        v_vec = vehicle_transform.get_forward_vector()
+        
+        # Vector to the target point, ignoring the Z-axis for a flat 2D steering model
+        target_vec = carla.Vector3D(target_loc.x - vehicle_location.x, target_loc.y - vehicle_location.y, 0.0)
+        target_vec_mag = np.sqrt(target_vec.x**2 + target_vec.y**2)
+        if target_vec_mag == 0:
+            return 0.0
+            
+        target_vec.x /= target_vec_mag
+        target_vec.y /= target_vec_mag
+        
+        # Cross product Z-component yields the signed steering direction (- left, + right)
+        cross_z = v_vec.x * target_vec.y - v_vec.y * target_vec.x
+        
+        # Return proportional control value capped between [-1.0, 1.0]
+        return float(np.clip(cross_z * 2.0, -1.0, 1.0))
+
     def process_image(self, image):
         """
         Callback function to process incoming camera frames and apply control.
@@ -259,28 +297,30 @@ class ADASController:
             throttle, brake, danger, obj = self.calculate_control(frame, result)
 
             # Apply Control
+            steer = 0.0
             if self.vehicle and self.vehicle.is_alive:
+                steer = self.calculate_steering()
                 control = carla.VehicleControl()
                 control.throttle = throttle
                 control.brake = brake
-                control.steer = 0.0
+                control.steer = steer
                 self.vehicle.apply_control(control)
 
             # Log results (Using DEBUG level to avoid terminal spam; change log level if desired)
             if obj:
                 logger.debug(
-                    "%s | conf=%.2f | bbox_ratio=%.3f | Throttle=%.2f Brake=%.2f",
-                    obj['class'], obj['confidence'], obj['ratio'], throttle, brake
+                    "%s | conf=%.2f | bbox_ratio=%.3f | Throttle=%.2f Brake=%.2f Steer=%.2f",
+                    obj['class'], obj['confidence'], obj['ratio'], throttle, brake, steer
                 )
             else:
-                logger.debug("No obstacle | Throttle=%.2f Brake=%.2f", throttle, brake)
+                logger.debug("No obstacle | Throttle=%.2f Brake=%.2f Steer=%.2f", throttle, brake, steer)
 
-            self._visualize(result, danger, throttle, brake)
+            self._visualize(result, danger, throttle, brake, steer)
 
         except Exception as e:
             logger.error("Error occurred during image processing: %s", e, exc_info=True)
 
-    def _visualize(self, result, danger, throttle, brake):
+    def _visualize(self, result, danger, throttle, brake, steer=0.0):
         """
         Annotates the frame with detection boxes and vehicle telemetry logic.
         
@@ -292,6 +332,8 @@ class ADASController:
         :type throttle: float
         :param brake: Current brake value.
         :type brake: float
+        :param steer: Current steer value.
+        :type steer: float
         """
         annotated = result.plot()
 
@@ -308,7 +350,7 @@ class ADASController:
         cv2.putText(annotated, text, (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 3)
         cv2.putText(
             annotated,
-            f"Throttle: {throttle:.2f}  Brake: {brake:.2f}",
+            f"Throttle: {throttle:.2f}  Brake: {brake:.2f}  Steer: {steer:.2f}",
             (40, 110),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.9,
@@ -316,7 +358,7 @@ class ADASController:
             2
         )
 
-        logger.info(f"{text} | Throttle: {throttle:.2f}  Brake: {brake:.2f}")
+        logger.info(f"{text} | Throttle: {throttle:.2f}  Brake: {brake:.2f}  Steer: {steer:.2f}")
         if self.visualize:
             cv2.imshow("YOLO Closed-Loop ADAS", annotated)
             cv2.waitKey(1)

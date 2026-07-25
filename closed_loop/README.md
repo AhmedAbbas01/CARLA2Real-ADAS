@@ -111,7 +111,7 @@ These are experimental thresholds, not physical distances.
 
 ## 9. Vehicle Control
 
-For this straight-line AEB test, CARLA autopilot is disabled `vehicle.set_autopilot(False)`
+For this AEB test, CARLA autopilot is disabled `vehicle.set_autopilot(False)`
 
 The script applies VehicleControl directly:
 
@@ -126,8 +126,7 @@ Brake = 0.40
 Throttle = 0.00
 Brake = 1.00
 ```
-
-The current test uses `steer = 0.0`. Therefore it is a straight-line AEB experiment, not a complete autonomous-driving controller.
+and applies the steering value based on the CARLA lanes objects
 
 ## 10. How to Run
 
@@ -163,9 +162,12 @@ EMERGENCY BRAKE     | Throttle: 0.00  Brake: 1.00
 For the first controlled experiment:
 
 1. Start CARLA.
-2. Use a relatively straight road.
-3. Place/spawn an obstacle vehicle ahead of the ego vehicle.
-4. Run clsloop.py.
+2. Run clsloop.py (either in cli or visualization mode).
+3. Run the example script (provided by Carla) to generate traffic objects 
+```bash
+cd ../CarlaUE5/PythonAPI/
+python generate_traffic.py
+```
 5. Let the ego vehicle approach the obstacle.
 6. Observe the YOLO/ADAS terminal output.
 7. Verify the transition from normal throttle to partial braking.
@@ -193,8 +195,6 @@ and a control decision was generated.
     - WARNING_BOX_RATIO and BRAKE_BOX_RATIO are experimental and should be tuned systematically.
 - No true TTC
     - The current implementation does not yet calculate physical Time-To-Collision.
-- Straight-line test
-    - Autopilot is disabled and steer is fixed at zero. This version validates longitudinal AEB control first.
 - Detector errors affect control
     - False negatives can prevent braking. False positives can cause unnecessary braking.
 
@@ -230,7 +230,6 @@ After the basic closed-loop test is verified, possible extensions are:
 - CARLA ground-truth distance for controlled validation
 - More realistic AEB thresholds
 - Lane-aware obstacle filtering
-- Navigation/steering while ADAS overrides longitudinal control
 - YOLO + RT-DETR + Faster R-CNN ensemble
 - Weighted Box Fusion
 - Detection/control logging
