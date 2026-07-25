@@ -64,8 +64,7 @@ class ADASController:
                  cruise_throttle=0.35,
                  warning_distance=15.0,
                  brake_distance=7.0,
-                 lane_min_x=0.30,
-                 lane_max_x=0.70,
+                 lane_width=3.5,
                  visualize=False):
         """
         Initializes the ADASController with configuration parameters.
@@ -88,10 +87,8 @@ class ADASController:
         :type warning_distance: float
         :param brake_distance: Distance in meters to trigger emergency braking.
         :type brake_distance: float
-        :param lane_min_x: Minimum normalized X coordinate to consider an object in the driving lane.
-        :type lane_min_x: float
-        :param lane_max_x: Maximum normalized X coordinate to consider an object in the driving lane.
-        :type lane_max_x: float
+        :param lane_width: Physical width of the ego lane in meters.
+        :type lane_width: float
         :param visualize: Whether to display the camera feed and YOLO bounding boxes.
         :type visualize: bool
         """
@@ -104,8 +101,7 @@ class ADASController:
         self.cruise_throttle = cruise_throttle
         self.warning_distance = warning_distance
         self.brake_distance = brake_distance
-        self.lane_min_x = lane_min_x
-        self.lane_max_x = lane_max_x
+        self.lane_width = lane_width
         self.visualize = visualize
 
         # Classes that can trigger braking
@@ -244,11 +240,19 @@ class ADASController:
                 continue
                 
             box_depth = np.median(depth_map[y1_idx:y2_idx, x1_idx:x2_idx])
+            center_x = (x1 + x2) / 2.0
+
+            # Calculate 3D lateral distance (X-axis) using pinhole camera model
+            # Assuming 90-degree horizontal FOV: focal_length = width / 2.0
+            focal_length = width / 2.0
+            c_x = width / 2.0
+            lateral_distance = box_depth * (center_x - c_x) / focal_length
 
             detected_objects.append({
                 "class": class_name,
                 "confidence": confidence,
                 "distance": float(box_depth),
+                "lateral_distance": float(lateral_distance),
                 "box": (int(x1), int(y1), int(x2), int(y2))
             })
 
@@ -256,11 +260,8 @@ class ADASController:
             if class_name not in self.danger_classes:
                 continue
 
-            center_x = (x1 + x2) / 2
-            normalized_center_x = center_x / width
-
-            # Ignore objects outside approximate ego lane
-            if not (self.lane_min_x <= normalized_center_x <= self.lane_max_x):
+            # Ignore objects outside the physical ego lane (true lateral distance)
+            if abs(lateral_distance) > (self.lane_width / 2.0):
                 continue
 
             if box_depth < min_distance:
@@ -404,7 +405,7 @@ class ADASController:
                 continue
 
             x1, y1, x2, y2 = obj["box"]
-            label = f"{obj['class']} {obj['distance']:.1f}m"
+            label = f"{obj['class']} {obj['distance']:.1f}m (Lat: {obj['lateral_distance']:.1f}m)"
             
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
             (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
@@ -511,8 +512,7 @@ def main():
     parser.add_argument("--cruise-throttle", type=float, default=0.35, help="Default throttle value for safe driving (default: 0.35)")
     parser.add_argument("--warning-distance", type=float, default=15.0, help="Distance in meters to trigger a warning/slow down (default: 15.0)")
     parser.add_argument("--brake-distance", type=float, default=7.0, help="Distance in meters to trigger emergency braking (default: 7.0)")
-    parser.add_argument("--lane-min-x", type=float, default=0.30, help="Minimum normalized X coordinate to consider an object in the driving lane (default: 0.30)")
-    parser.add_argument("--lane-max-x", type=float, default=0.70, help="Maximum normalized X coordinate to consider an object in the driving lane (default: 0.70)")
+    parser.add_argument("--lane-width", type=float, default=2, help="Physical width of the ego lane in meters (default: 2)")
     parser.add_argument("--visualize", action="store_true", help="Enable visualization of the YOLO detections window")
     parser.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], help="Set the logging level (default: INFO)")
 
@@ -531,8 +531,7 @@ def main():
         cruise_throttle=args.cruise_throttle,
         warning_distance=args.warning_distance,
         brake_distance=args.brake_distance,
-        lane_min_x=args.lane_min_x,
-        lane_max_x=args.lane_max_x,
+        lane_width=args.lane_width,
         visualize=args.visualize
     )
     adas_controller.run()
