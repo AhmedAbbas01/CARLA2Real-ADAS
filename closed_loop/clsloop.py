@@ -199,7 +199,7 @@ class ADASController:
         camera_bp.set_attribute("image_size_y", "720")
         camera_bp.set_attribute("fov", "90")
 
-        camera_transform = carla.Transform(carla.Location(x=1.5, z=2.4))
+        camera_transform = carla.Transform(carla.Location(x=self.vehicle.bounding_box.extent.x + 0.1, z=2.4))
         self.camera = self.world.spawn_actor(
             camera_bp,
             camera_transform,
@@ -400,6 +400,9 @@ class ADASController:
         annotated = frame.copy()
 
         for obj in detected_objects:
+            if obj['class'] not in self.danger_classes:
+                continue
+
             x1, y1, x2, y2 = obj["box"]
             label = f"{obj['class']} {obj['distance']:.1f}m"
             
