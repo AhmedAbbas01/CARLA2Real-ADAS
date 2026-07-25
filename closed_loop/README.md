@@ -136,16 +136,24 @@ Launch CARLA and wait until the world is fully loaded.
 ### Step 2 - Verify best.pt
 Confirm that your trained checkpoint exists at the path configured in `MODEL_PATH`.
 ### Step 3 - Run the script
-i.e. `python clsloop.py` 
+Either in cli mode:
+```bash
+python closed_loop/clsloop.py --model-path $PWD/fine-tuning/runs/yolov8n_detect/weights/best.pt
+```
+Or in visualization mode, where a cv2 window is opened to show the detected objects and the driving decision
+```bash
+python closed_loop/clsloop.py --model-path $PWD/fine-tuning/runs/yolov8n_detect/weights/best.pt --visualize
+```
+
 ### Step 4 - Observe the terminal
 ```bash
 # Normal output with no relevant obstacle:
-No obstacle | Throttle=0.35 Brake=0.00
+SAFE | Throttle=0.35 Brake=0.00
 
 # Example as a detected vehicle approaches:
-Car | conf=0.87 | bbox_ratio=0.18 | Throttle=0.35 Brake=0.00
-Car | conf=0.91 | bbox_ratio=0.29 | Throttle=0.00 Brake=0.40
-Car | conf=0.95 | bbox_ratio=0.43 | Throttle=0.00 Brake=1.00
+SAFE                | Throttle: 0.35  Brake: 0.00
+WARNING / BRAKING   | Throttle: 0.00  Brake: 0.40
+EMERGENCY BRAKE     | Throttle: 0.00  Brake: 1.00
 
 # Brake=1.00 means the ADAS controller has commanded full braking.
 ```

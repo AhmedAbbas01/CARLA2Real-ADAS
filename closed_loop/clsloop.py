@@ -7,6 +7,7 @@ import argparse
 import logging
 import sys
 import time
+import queue
 
 # ============================================================
 # CONFIGURATION & LOGGING
@@ -54,7 +55,8 @@ class ADASController:
                  warning_box_ratio=0.25,
                  brake_box_ratio=0.40,
                  lane_min_x=0.30,
-                 lane_max_x=0.70):
+                 lane_max_x=0.70,
+                 visualize=False):
         """
         Initializes the ADASController with configuration parameters.
 
@@ -78,6 +80,8 @@ class ADASController:
         :type lane_min_x: float
         :param lane_max_x: Maximum normalized X coordinate to consider an object in the driving lane.
         :type lane_max_x: float
+        :param visualize: Whether to display the camera feed and YOLO bounding boxes.
+        :type visualize: bool
         """
         self.host = host
         self.port = port
@@ -89,6 +93,7 @@ class ADASController:
         self.brake_box_ratio = brake_box_ratio
         self.lane_min_x = lane_min_x
         self.lane_max_x = lane_max_x
+        self.visualize = visualize
 
         # Classes that can trigger braking
         self.danger_classes = {"Car", "Truck", "Bus", "Motorcycle", "Bicycle", "Pedestrians"}
@@ -311,9 +316,10 @@ class ADASController:
             2
         )
 
-        # Uncomment to view cv2 stream if not running headlessly
-        # cv2.imshow("YOLO Closed-Loop ADAS", annotated)
-        # cv2.waitKey(1)
+        logger.info(f"{text} | Throttle: {throttle:.2f}  Brake: {brake:.2f}")
+        if self.visualize:
+            cv2.imshow("YOLO Closed-Loop ADAS", annotated)
+            cv2.waitKey(1)
 
     def run(self):
         """
@@ -324,15 +330,26 @@ class ADASController:
             self.connect_carla()
             self.spawn_actors()
 
-            logger.info("Starting camera listener...")
-            self.camera.listen(self.process_image)
+            logger.info("Enabling synchronous mode...")
+            settings = self.world.get_settings()
+            settings.synchronous_mode = True
+            settings.fixed_delta_seconds = 0.05  # 20 FPS
+            self.world.apply_settings(settings)
+
+            image_queue = queue.Queue()
+            self.camera.listen(image_queue.put)
 
             logger.info("====================================")
-            logger.info("Closed-loop ADAS running. Press Ctrl+C to stop.")
+            logger.info("Closed-loop ADAS running in SYNC mode. Press Ctrl+C to stop.")
             logger.info("====================================")
+
+            spectator = self.world.get_spectator()
 
             while True:
-                time.sleep(0.1)
+                self.world.tick()
+                image = image_queue.get()
+                self.process_image(image)
+                spectator.set_transform(self.camera.get_transform())
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user. Stopping...")
@@ -345,6 +362,11 @@ class ADASController:
         """
         Stops sensors and destroys all spawned CARLA actors to clean up the simulation.
         """
+        if self.world is not None:
+            settings = self.world.get_settings()
+            settings.synchronous_mode = False
+            self.world.apply_settings(settings)
+
         logger.info("Cleaning up CARLA actors...")
         if self.camera and self.camera.is_alive:
             self.camera.stop()
@@ -374,6 +396,7 @@ def main():
     parser.add_argument("--brake-box-ratio", type=float, default=0.40, help="Bounding box height ratio to trigger emergency braking (default: 0.40)")
     parser.add_argument("--lane-min-x", type=float, default=0.30, help="Minimum normalized X coordinate to consider an object in the driving lane (default: 0.30)")
     parser.add_argument("--lane-max-x", type=float, default=0.70, help="Maximum normalized X coordinate to consider an object in the driving lane (default: 0.70)")
+    parser.add_argument("--visualize", action="store_true", help="Enable visualization of the YOLO detections window")
     parser.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], help="Set the logging level (default: INFO)")
 
     args = parser.parse_args()
@@ -391,7 +414,8 @@ def main():
         warning_box_ratio=args.warning_box_ratio,
         brake_box_ratio=args.brake_box_ratio,
         lane_min_x=args.lane_min_x,
-        lane_max_x=args.lane_max_x
+        lane_max_x=args.lane_max_x,
+        visualize=args.visualize
     )
     adas_controller.run()
 
