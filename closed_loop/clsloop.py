@@ -8,6 +8,8 @@ import logging
 import sys
 import time
 import queue
+import os
+from contextlib import chdir
 
 # ============================================================
 # CONFIGURATION & LOGGING
@@ -39,6 +41,13 @@ except ImportError:
     logger.critical("ultralytics module not found. Please install ultralytics for YOLO.")
     sys.exit(1)
 
+try:
+    import torch
+    import depth_pro
+    from PIL import Image
+except ImportError:
+    logger.warning("depth_pro or torch module not found. Please install Apple's ml-depth-pro.")
+
 
 class ADASController:
     """
@@ -48,12 +57,13 @@ class ADASController:
     def __init__(self,
                  host="localhost",
                  port=2000,
-                 model_path="yolov8n.pt",
+                 yolo_model_path="yolov8n.pt",
+                 depth_model_path="/home/ubuntu/workset/CARLA2Real-ADAS/fine-tuning/ml-depth-pro",
                  conf_threshold=0.40,
                  img_sz=1280,
                  cruise_throttle=0.35,
-                 warning_box_ratio=0.25,
-                 brake_box_ratio=0.40,
+                 warning_distance=15.0,
+                 brake_distance=7.0,
                  lane_min_x=0.30,
                  lane_max_x=0.70,
                  visualize=False):
@@ -64,18 +74,20 @@ class ADASController:
         :type host: str
         :param port: CARLA server port.
         :type port: int
-        :param model_path: Path to the YOLO weights file.
-        :type model_path: str
+        :param yolo_model_path: Path to the YOLO weights file.
+        :type yolo_model_path: str
+        :param depth_model_path: Path to the Depth Pro model directory.
+        :type depth_model_path: str
         :param conf_threshold: Minimum confidence threshold for YOLO detections.
         :type conf_threshold: float
         :param img_sz: Image size for YOLO inference.
         :type img_sz: int
         :param cruise_throttle: Default throttle value for safe driving.
         :type cruise_throttle: float
-        :param warning_box_ratio: Bounding box height ratio to trigger a warning/slow down.
-        :type warning_box_ratio: float
-        :param brake_box_ratio: Bounding box height ratio to trigger emergency braking.
-        :type brake_box_ratio: float
+        :param warning_distance: Distance in meters to trigger a warning/slow down.
+        :type warning_distance: float
+        :param brake_distance: Distance in meters to trigger emergency braking.
+        :type brake_distance: float
         :param lane_min_x: Minimum normalized X coordinate to consider an object in the driving lane.
         :type lane_min_x: float
         :param lane_max_x: Maximum normalized X coordinate to consider an object in the driving lane.
@@ -85,12 +97,13 @@ class ADASController:
         """
         self.host = host
         self.port = port
-        self.model_path = model_path
+        self.yolo_model_path = yolo_model_path
+        self.depth_model_path = depth_model_path
         self.conf_threshold = conf_threshold
         self.img_sz = img_sz
         self.cruise_throttle = cruise_throttle
-        self.warning_box_ratio = warning_box_ratio
-        self.brake_box_ratio = brake_box_ratio
+        self.warning_distance = warning_distance
+        self.brake_distance = brake_distance
         self.lane_min_x = lane_min_x
         self.lane_max_x = lane_max_x
         self.visualize = visualize
@@ -104,20 +117,35 @@ class ADASController:
         self.vehicle = None
         self.camera = None
         self.model = None
+        self.depth_model = None
+        self.depth_transform = None
 
     def load_model(self):
         """
-        Loads the YOLO model for object detection.
+        Loads the YOLO model and Depth Pro model.
 
         :raises RuntimeError: If the model fails to load or the file is missing.
         """
-        logger.info("Loading YOLO model from %s...", self.model_path)
+        logger.info("Loading YOLO model from %s...", self.yolo_model_path)
         try:
-            self.model = YOLO(self.model_path)
+            self.model = YOLO(self.yolo_model_path)
             logger.info("YOLO model loaded successfully.")
         except Exception as e:
             logger.error("Failed to load YOLO model: %s", e)
             raise RuntimeError(f"Model loading failed: {e}")
+            
+        logger.info("Loading Depth Pro model from %s...", self.depth_model_path)
+        try:
+            # Temporarily change directory for finding depth_pro weights
+            with chdir(self.depth_model_path):
+                self.depth_model, self.depth_transform = depth_pro.create_model_and_transforms()
+                self.depth_model.eval()
+                if torch.cuda.is_available():
+                    self.depth_model = self.depth_model.to("cuda")
+                logger.info("Depth Pro model loaded successfully.")
+        except Exception as e:
+            logger.error("Failed to load Depth Pro model: %s", e)
+            raise RuntimeError(f"Depth Pro loading failed: {e}")
 
     def connect_carla(self):
         """
@@ -178,7 +206,7 @@ class ADASController:
         )
         logger.info("RGB Camera attached to the vehicle.")
 
-    def calculate_control(self, frame, result):
+    def calculate_control(self, frame, result, depth_map):
         """
         Calculates the vehicle control (throttle and brake) based on YOLO detections.
 
@@ -186,13 +214,15 @@ class ADASController:
         :type frame: numpy.ndarray
         :param result: The YOLO model inference result containing bounding boxes.
         :type result: ultralytics.engine.results.Results
+        :param depth_map: The depth map generated by Depth Pro.
+        :type depth_map: numpy.ndarray
         :return: A tuple containing throttle, brake, danger level, and closest object dictionary.
         :rtype: tuple(float, float, int, dict or None)
         """
         height, width = frame.shape[:2]
         danger_level = 0
         closest_object = None
-        largest_ratio = 0.0
+        min_distance = float('inf')
 
         for box in result.boxes:
             confidence = float(box.conf[0])
@@ -206,7 +236,6 @@ class ADASController:
                 continue
 
             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-            box_height = y2 - y1
 
             center_x = (x1 + x2) / 2
             normalized_center_x = center_x / width
@@ -215,20 +244,27 @@ class ADASController:
             if not (self.lane_min_x <= normalized_center_x <= self.lane_max_x):
                 continue
 
-            box_ratio = box_height / height
+            # Calculate median depth within bounding box to avoid edge outliers
+            y1_idx, y2_idx = max(0, int(y1)), min(height, int(y2))
+            x1_idx, x2_idx = max(0, int(x1)), min(width, int(x2))
+            
+            if y1_idx >= y2_idx or x1_idx >= x2_idx:
+                continue
+                
+            box_depth = np.median(depth_map[y1_idx:y2_idx, x1_idx:x2_idx])
 
-            if box_ratio > largest_ratio:
-                largest_ratio = box_ratio
+            if box_depth < min_distance:
+                min_distance = box_depth
                 closest_object = {
                     "class": class_name,
                     "confidence": confidence,
-                    "ratio": box_ratio,
+                    "distance": float(box_depth),
                     "box": (x1, y1, x2, y2)
                 }
 
-        if largest_ratio >= self.brake_box_ratio:
+        if min_distance <= self.brake_distance:
             throttle, brake, danger_level = 0.0, 1.0, 2
-        elif largest_ratio >= self.warning_box_ratio:
+        elif min_distance <= self.warning_distance:
             throttle, brake, danger_level = 0.0, 0.40, 1
         else:
             throttle, brake, danger_level = self.cruise_throttle, 0.0, 0
@@ -285,6 +321,25 @@ class ADASController:
             array = array.reshape((image.height, image.width, 4))
             frame = array[:, :, :3]
 
+            # Depth Pro Inference
+            try:
+                # Prepare image for depth_pro
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_img = Image.fromarray(rgb_frame)
+                input_tensor = self.depth_transform(pil_img)
+                if torch.cuda.is_available():
+                    input_tensor = input_tensor.to("cuda")
+                
+                # Assuming 90 FOV for width 1280 => focal length f_px = 640
+                with torch.no_grad():
+                    prediction = self.depth_model.infer(input_tensor, f_px=640.0)
+                    depth_map = prediction["depth"].cpu().numpy()
+                    if depth_map.shape != (image.height, image.width):
+                        depth_map = cv2.resize(depth_map, (image.width, image.height), interpolation=cv2.INTER_NEAREST)
+            except Exception as e:
+                logger.error("Depth Pro inference failed: %s", e)
+                depth_map = np.ones((image.height, image.width)) * 100.0  # Safe fallback distance
+
             # YOLO Inference
             results = self.model.predict(
                 frame,
@@ -294,7 +349,7 @@ class ADASController:
             )
             result = results[0]
 
-            throttle, brake, danger, obj = self.calculate_control(frame, result)
+            throttle, brake, danger, obj = self.calculate_control(frame, result, depth_map)
 
             # Apply Control
             steer = 0.0
@@ -309,8 +364,8 @@ class ADASController:
             # Log results (Using DEBUG level to avoid terminal spam; change log level if desired)
             if obj:
                 logger.debug(
-                    "%s | conf=%.2f | bbox_ratio=%.3f | Throttle=%.2f Brake=%.2f Steer=%.2f",
-                    obj['class'], obj['confidence'], obj['ratio'], throttle, brake, steer
+                    "%s | conf=%.2f | distance=%.2fm | Throttle=%.2f Brake=%.2f Steer=%.2f",
+                    obj['class'], obj['confidence'], obj['distance'], throttle, brake, steer
                 )
             else:
                 logger.debug("No obstacle | Throttle=%.2f Brake=%.2f Steer=%.2f", throttle, brake, steer)
@@ -430,12 +485,13 @@ def main():
     parser = argparse.ArgumentParser(description="Closed-Loop ADAS script for CARLA.")
     parser.add_argument("--host", type=str, default="localhost", help="CARLA server host address (default: localhost)")
     parser.add_argument("--port", type=int, default=2000, help="CARLA server port (default: 2000)")
-    parser.add_argument("--model-path", type=str, default="yolov8n.pt", help="Path to the YOLO weights file (default: yolov8n.pt)")
+    parser.add_argument("--yolo-model-path", type=str, default="yolov8n.pt", help="Path to the YOLO weights file (default: yolov8n.pt)")
+    parser.add_argument("--depth-model-path", type=str, default="fine-tuning/ml-depth-pro", help="Path to the Depth Pro model directory (default: /home/ubuntu/workset/CARLA2Real-ADAS/fine-tuning/ml-depth-pro)")
     parser.add_argument("--conf-threshold", type=float, default=0.40, help="Minimum confidence threshold for YOLO detections (default: 0.40)")
     parser.add_argument("--img-sz", type=int, default=1280, help="Image size for YOLO inference (default: 1280)")
     parser.add_argument("--cruise-throttle", type=float, default=0.35, help="Default throttle value for safe driving (default: 0.35)")
-    parser.add_argument("--warning-box-ratio", type=float, default=0.25, help="Bounding box height ratio to trigger a warning/slow down (default: 0.25)")
-    parser.add_argument("--brake-box-ratio", type=float, default=0.40, help="Bounding box height ratio to trigger emergency braking (default: 0.40)")
+    parser.add_argument("--warning-distance", type=float, default=15.0, help="Distance in meters to trigger a warning/slow down (default: 15.0)")
+    parser.add_argument("--brake-distance", type=float, default=7.0, help="Distance in meters to trigger emergency braking (default: 7.0)")
     parser.add_argument("--lane-min-x", type=float, default=0.30, help="Minimum normalized X coordinate to consider an object in the driving lane (default: 0.30)")
     parser.add_argument("--lane-max-x", type=float, default=0.70, help="Maximum normalized X coordinate to consider an object in the driving lane (default: 0.70)")
     parser.add_argument("--visualize", action="store_true", help="Enable visualization of the YOLO detections window")
@@ -449,12 +505,13 @@ def main():
     adas_controller = ADASController(
         host=args.host,
         port=args.port,
-        model_path=args.model_path,
+        yolo_model_path=args.yolo_model_path,
+        depth_model_path=args.depth_model_path,
         conf_threshold=args.conf_threshold,
         img_sz=args.img_sz,
         cruise_throttle=args.cruise_throttle,
-        warning_box_ratio=args.warning_box_ratio,
-        brake_box_ratio=args.brake_box_ratio,
+        warning_distance=args.warning_distance,
+        brake_distance=args.brake_distance,
         lane_min_x=args.lane_min_x,
         lane_max_x=args.lane_max_x,
         visualize=args.visualize

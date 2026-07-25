@@ -198,29 +198,11 @@ and a control decision was generated.
 - Detector errors affect control
     - False negatives can prevent braking. False positives can cause unnecessary braking.
 
-## 14. OpenCV Visualization Error
-
-Some OpenCV installations do not support `cv2.imshow()`.
-
-If you receive an error saying the function is not implemented, remove/comment:
-```python
-cv2.imshow(...)
-cv2.waitKey(...)
-cv2.destroyAllWindows()
-```
-The closed-loop controller does not require the OpenCV window.
-
-## 15. Vehicle Blueprint Error
-
-Some CARLA builds do not contain `vehicle.tesla.model3`. If that produces `“RuntimeError: index out of range”`, select an available vehicle from `world.get_blueprint_library().filter("vehicle.*")`
-
-A robust script can try the Tesla first and fall back to another vehicle.
-
-## 16. Stopping the Program
+## 14. Stopping the Program
 
 Press: `Ctrl + C`: The cleanup section should stop/destroy the camera and destroy the spawned ego vehicle.
 
-## 17. Next Steps
+## 15. Next Steps
 
 After the basic closed-loop test is verified, possible extensions are:
 
@@ -235,7 +217,7 @@ After the basic closed-loop test is verified, possible extensions are:
 - Detection/control logging
 - Quantitative AEB experiments such as stopping distance and collision rate
 
-## 18. Summary
+## 16. Summary
 
 The main final test is to introduce an obstacle and observe the controller transition:
 ```bash
