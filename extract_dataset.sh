@@ -21,4 +21,3 @@ for weather in "${Weather_List[@]}"; do
  sleep 5
 
 done
-
