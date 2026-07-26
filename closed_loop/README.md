@@ -8,7 +8,7 @@ detector.
 
 ### Pipeline:
 
-- CARLA RGB Camera -> Fine-tuned YOLOv8 (best.pt) -> Object detections -> ADAS risk logic -> Throttle / Brake command -> CARLA ego vehicle -> Next camera frame
+- CARLA RGB Camera -> Fine-tuned YOLOv8 (best.pt) -> Object detections -> Depth Anything V2 -> Object distances -> ADAS risk logic -> Throttle / Brake command -> CARLA ego vehicle -> Next camera frame
 
 - YOLO performs perception only. The ADAS logic converts YOLO detections into vehicle-control commands.
 
@@ -19,38 +19,45 @@ The script verifies that:
 1.  CARLA supplies live RGB frames.
 2.  The trained YOLOv8 model processes those frames.
 3.  Relevant road users are detected.
-4.  Detection information reaches the ADAS logic.
-5.  The ADAS logic selects throttle/brake commands.
-6.  Those commands are applied back to the CARLA vehicle.
+4.  The depth estimator model (Depth Anything V2) processes the frames.
+5.  Detection information reaches the ADAS logic.
+6.  The ADAS logic selects throttle/brake commands.
+7.  Those commands are applied back to the CARLA vehicle.
 
 This forms the closed perception-to-control feedback loop.
 
-## 3. Requirements
-
--   CARLA simulator
--   Python 3
--   PyTorch
--   Ultralytics
--   NumPy
--   CARLA Python API
--   OpenCV only if visualization is enabled
-
-Example:
-```bash
-pip install ultralytics numpy
-```
-The CARLA Python API must be importable from the environment running the
-script.
-
-## 4. Trained Model
+## 3. YOLOv8 Fine-tuned Model
 
 The script loads the fine-tuned YOLO checkpoint, for example:
 ```python
-MODEL_PATH = "runs/yolov8s_detect/weights/best.pt"
+--yolo-model-path "~/Downloads/best.pt"
 ```
 Make sure this points to your actual best.pt.
 
 >Note: The closed-loop script performs inference only. It does not retrain YOLO.
+
+Typical settings:
+```python
+IMGSZ = 1280
+CONF_THRESHOLD = 0.40
+```
+Detections below the confidence threshold are ignored.
+
+Relevant obstacle classes can include:
+
+-   Car
+-   Truck
+-   Bus
+-   Motorcycle
+-   Bicycle
+-   Pedestrians
+
+## 4. Depth Anything V2 Fine-tuned Model
+
+At this moment, the script loads the pretrained Depth Anything V2 checkpoint. You need to clone [the repo](https://github.com/DepthAnything/Depth-Anything-V2) and download the **metric_depth pretrained models** before running. then you may pass the model path as follows:
+```python
+--depth-model-path "$PWD/closed_loop/DepthAnythingV2/"
+```
 
 ## 5. CARLA Connection
 
@@ -69,45 +76,6 @@ Resolution: 1280 x 720
 FOV: 90 degrees
 ```
 Each frame is converted to a NumPy image and passed to YOLO.
-
-## 7. YOLO Inference
-
-Typical settings:
-```python
-IMGSZ = 1280
-CONF_THRESHOLD = 0.40
-```
-Detections below the confidence threshold are ignored.
-
-Relevant obstacle classes can include:
-
--   Car
--   Truck
--   Bus
--   Motorcycle
--   Bicycle
--   Pedestrians
-
-
-## [To be updated] 8. Current Collision-Risk Logic
-
-The current proof-of-concept does NOT calculate true distance in meters.
-
-Instead, it uses bounding-box height relative to image height as a
-simple closeness proxy:
-
-    small bounding box -> probably farther away
-    large bounding box -> probably closer
-
-It also checks horizontal bounding-box position so that objects well
-outside the approximate ego-lane region do not trigger braking.
-
-Example thresholds:
-
-    WARNING_BOX_RATIO = 0.25
-    BRAKE_BOX_RATIO = 0.40
-
-These are experimental thresholds, not physical distances.
 
 ## 9. Vehicle Control
 
@@ -132,16 +100,16 @@ and applies the steering value based on the CARLA lanes objects
 
 ### Step 1 - Start CARLA
 Launch CARLA and wait until the world is fully loaded.
-### Step 2 - Verify best.pt
-Confirm that your trained checkpoint exists at the path configured in `MODEL_PATH`.
+### Step 2 - Verify models checkpoints
+Confirm that your trained checkpoints exist at the specified paths.
 ### Step 3 - Run the script
 Either in cli mode:
 ```bash
-python closed_loop/clsloop.py --model-path $PWD/fine-tuning/runs/yolov8n_detect/weights/best.pt
+python closed_loop/clsloop.py --yolo-model-path $PWD/fine-tuning/runs/yolov8n_detect/weights/best.pt --depth-model-path $PWD/closed_loop/DepthAnythingV2/
 ```
 Or in visualization mode, where a cv2 window is opened to show the detected objects and the driving decision
 ```bash
-python closed_loop/clsloop.py --model-path $PWD/fine-tuning/runs/yolov8n_detect/weights/best.pt --visualize
+python closed_loop/clsloop.py --yolo-model-path $PWD/fine-tuning/runs/yolov8n_detect/weights/best.pt --depth-model-path $PWD/closed_loop/DepthAnythingV2/ --visualize
 ```
 
 ### Step 4 - Observe the terminal
@@ -189,10 +157,6 @@ and a control decision was generated.
 
 ## 13. Important Limitations
 
-- [To be updated] Bounding-box size is not true distance
-    - The current system uses bounding-box size as a heuristic. Do not report bbox_ratio as distance in meters.
-- [To be updated] Thresholds need validation
-    - WARNING_BOX_RATIO and BRAKE_BOX_RATIO are experimental and should be tuned systematically.
 - No true TTC
     - The current implementation does not yet calculate physical Time-To-Collision.
 - Detector errors affect control
@@ -206,7 +170,6 @@ Press: `Ctrl + C`: The cleanup section should stop/destroy the camera and destro
 
 After the basic closed-loop test is verified, possible extensions are:
 
-- Metric depth/distance estimation
 - Time-To-Collision (TTC)
 - Relative velocity estimation
 - CARLA ground-truth distance for controlled validation

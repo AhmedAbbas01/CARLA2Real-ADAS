@@ -42,11 +42,43 @@ except ImportError:
     sys.exit(1)
 
 try:
+    import cv2
     import torch
-    import depth_pro
-    from PIL import Image
+    from DepthAnythingV2.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
 except ImportError:
-    logger.warning("depth_pro or torch module not found. Please install Apple's ml-depth-pro.")
+    logger.critical("DepthAnythingV2 module not found. Please clone the DepthAnythingV2 repository.")
+    sys.exit(1)
+
+
+class DepthAnythingMetricPredictor:
+    def __init__(self, encoder="vitb", device=None):
+        self.device = device or (
+            "cuda" if torch.cuda.is_available()
+            else "mps" if torch.backends.mps.is_available()
+            else "cpu"
+        )
+
+        model_configs = {
+            'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
+            'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
+            'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]}
+        }
+
+        if encoder not in model_configs:
+            raise ValueError(f"Invalid encoder: {encoder}")
+        # Load model
+        # max_depth = 80 # outdoor model (vkitti)
+        max_depth = 20 # indoor model (hypersim)
+        self.model = DepthAnythingV2(**{**model_configs[encoder], 'max_depth': max_depth})
+        # self.model.load_state_dict(torch.load(f"checkpoints/depth_anything_v2_metric_vkitti_{encoder}.pth", map_location="cpu"))
+        self.model.load_state_dict(torch.load(f"checkpoints/depth_anything_v2_metric_hypersim_{encoder}.pth", map_location="cpu"))
+        self.model = self.model.to(self.device).eval()
+
+
+    def infer_image(self, image):
+        """Run depth estimation on a single image."""
+        depth = self.model.infer_image(image)  # float32 depth tensor
+        return depth
 
 
 class ADASController:
@@ -58,15 +90,14 @@ class ADASController:
                  host="localhost",
                  port=2000,
                  yolo_model_path="yolov8n.pt",
-                 depth_model_path="/home/ubuntu/workset/CARLA2Real-ADAS/fine-tuning/ml-depth-pro",
+                 depth_model_path="/home/ubuntu/workset/CARLA2Real-ADAS/closed_loop/DepthAnythingV2/",
                  conf_threshold=0.40,
                  img_sz=1280,
                  cruise_throttle=0.35,
                  warning_distance=15.0,
                  brake_distance=7.0,
                  lane_width=3.5,
-                 visualize=False,
-                 use_depth_pro=True):
+                 visualize=False):
         """
         Initializes the ADASController with configuration parameters.
 
@@ -76,7 +107,7 @@ class ADASController:
         :type port: int
         :param yolo_model_path: Path to the YOLO weights file.
         :type yolo_model_path: str
-        :param depth_model_path: Path to the Depth Pro model directory.
+        :param depth_model_path: Path to the Depth Anything V2 model directory.
         :type depth_model_path: str
         :param conf_threshold: Minimum confidence threshold for YOLO detections.
         :type conf_threshold: float
@@ -92,8 +123,6 @@ class ADASController:
         :type lane_width: float
         :param visualize: Whether to display the camera feed and YOLO bounding boxes.
         :type visualize: bool
-        :param use_depth_pro: Enable or disable Depth Pro inference.
-        :type use_depth_pro: bool
         """
         self.host = host
         self.port = port
@@ -106,7 +135,6 @@ class ADASController:
         self.brake_distance = brake_distance
         self.lane_width = lane_width
         self.visualize = visualize
-        self.use_depth_pro = use_depth_pro
 
         # Classes that can trigger braking
         self.danger_classes = {"Car", "Truck", "Bus", "Motorcycle", "Bicycle", "Pedestrians"}
@@ -118,11 +146,10 @@ class ADASController:
         self.camera = None
         self.model = None
         self.depth_model = None
-        self.depth_transform = None
 
     def load_model(self):
         """
-        Loads the YOLO model and Depth Pro model.
+        Loads the YOLO model and Depth Anything V2 model.
 
         :raises RuntimeError: If the model fails to load or the file is missing.
         """
@@ -134,22 +161,15 @@ class ADASController:
             logger.error("Failed to load YOLO model: %s", e)
             raise RuntimeError(f"Model loading failed: {e}")
             
-        if self.use_depth_pro:
-            logger.info(f"Loading Depth Pro model from {self.depth_model_path}/checkpoints/depth_pro.pt ...")
-            try:
-                # Temporarily change directory for finding depth_pro weights
-                with chdir(self.depth_model_path):
-                    self.depth_model, self.depth_transform = depth_pro.create_model_and_transforms()
-                    self.depth_model.half()
-                    self.depth_model.eval()
-                    if torch.cuda.is_available():
-                        self.depth_model = self.depth_model.to("cuda")
-                    logger.info("Depth Pro model loaded successfully.")
-            except Exception as e:
-                logger.error("Failed to load Depth Pro model: %s", e)
-                raise RuntimeError(f"Depth Pro loading failed: {e}")
-        else:
-            logger.info("Depth Pro inference is disabled.")
+        logger.info(f"Loading Depth Anything V2 model from {self.depth_model_path} ...")
+        try:
+            # Temporarily change directory for finding Depth Anything V2 weights
+            with chdir(self.depth_model_path):
+                self.depth_model = DepthAnythingMetricPredictor(encoder="vits")
+                logger.info("Depth Anything V2 model loaded successfully.")
+        except Exception as e:
+            logger.error("Failed to load Depth Anything V2 model: %s", e)
+            raise RuntimeError(f"Depth Anything V2 loading failed: {e}")
 
     def connect_carla(self):
         """
@@ -218,7 +238,7 @@ class ADASController:
         :type frame: numpy.ndarray
         :param result: The YOLO model inference result containing bounding boxes.
         :type result: ultralytics.engine.results.Results
-        :param depth_map: The depth map generated by Depth Pro.
+        :param depth_map: The depth map generated by Depth Anything V2.
         :type depth_map: numpy.ndarray
         :return: A tuple containing throttle, brake, danger level, closest object dictionary, and list of all detected objects.
         :rtype: tuple(float, float, int, dict or None, list)
@@ -280,7 +300,16 @@ class ADASController:
         elif min_distance <= self.warning_distance:
             throttle, brake, danger_level = 0.0, 0.40, 1
         else:
-            throttle, brake, danger_level = self.cruise_throttle, 0.0, 0
+            # SAFE DRIVING - but keep velocity < 30 km/h to be able to control the vehicle
+            if self.vehicle:
+                v = self.vehicle.get_velocity()
+                speed_kmh = 3.6 * np.sqrt(v.x**2 + v.y**2 + v.z**2)
+                if speed_kmh >= 30.0:
+                    throttle, brake, danger_level = 0.0, 0.0, 0
+                else:
+                    throttle, brake, danger_level = self.cruise_throttle, 0.0, 0
+            else:
+                throttle, brake, danger_level = self.cruise_throttle, 0.0, 0
 
         return throttle, brake, danger_level, closest_object, detected_objects
 
@@ -334,28 +363,18 @@ class ADASController:
             array = array.reshape((image.height, image.width, 4))
             frame = array[:, :, :3]
 
-            if self.use_depth_pro and self.depth_model is not None:
-                # Depth Pro Inference
+            if self.depth_model is not None:
+                # Depth Anything V2 Inference
                 try:
-                    # Prepare image for depth_pro
-                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    pil_img = Image.fromarray(rgb_frame)
-                    input_tensor = self.depth_transform(pil_img)
-                    if torch.cuda.is_available():
-                        input_tensor = input_tensor.to("cuda")
-                    input_tensor = input_tensor.half()
-                    
-                    # Assuming 90 FOV for width 1280 => focal length f_px = 640
                     with torch.no_grad():
-                        f_px_tensor = torch.tensor(640.0, device=input_tensor.device, dtype=input_tensor.dtype)
-                        prediction = self.depth_model.infer(input_tensor, f_px=f_px_tensor)
-                        depth_map = prediction["depth"].cpu().numpy()
-                        if depth_map.shape != (image.height, image.width):
-                            depth_map = cv2.resize(depth_map, (image.width, image.height), interpolation=cv2.INTER_NEAREST)
+                        depth_map = self.depth_model.infer_image(frame)
+                    if depth_map.shape != (image.height, image.width):
+                        depth_map = cv2.resize(depth_map, (image.width, image.height), interpolation=cv2.INTER_NEAREST)
                 except Exception as e:
-                    logger.error("Depth Pro inference failed: %s", e)
+                    logger.error("Depth Anything V2 inference failed: %s", e)
                     depth_map = np.ones((image.height, image.width)) * 100.0  # Safe fallback distance
             else:
+                logger.warning("Depth Anything V2 inference wasn't called")
                 depth_map = np.ones((image.height, image.width)) * 100.0  # Safe fallback distance
 
             # YOLO Inference
@@ -448,6 +467,29 @@ class ADASController:
             cv2.imshow("YOLO Closed-Loop ADAS", annotated)
             cv2.waitKey(1)
 
+    def get_view(self):
+        import math
+        # 1. Get the current position of the vehicle
+        vehicle_transform = self.vehicle.get_transform()
+        vehicle_loc = vehicle_transform.location
+        vehicle_rot = vehicle_transform.rotation
+
+        # 2. Calculate third-person offset (yaw matches the car)
+        # Convert yaw to radians to calculate X and Y vector offsets
+        yaw_rad = math.radians(vehicle_rot.yaw)
+        
+        # Position the spectator 8 meters behind and 3.5 meters above the car
+        spectator_x = vehicle_loc.x - 8.0 * math.cos(yaw_rad)
+        spectator_y = vehicle_loc.y - 8.0 * math.sin(yaw_rad)
+        spectator_z = vehicle_loc.z + 3.5
+
+        # 3. Angle the spectator slightly downward (-15 degrees pitch)
+        spectator_transform = carla.Transform(
+            carla.Location(x=spectator_x, y=spectator_y, z=spectator_z),
+            carla.Rotation(pitch=-15.0, yaw=vehicle_rot.yaw, roll=0.0)
+        )
+        return spectator_transform
+
     def run(self):
         """
         Sets up the environment and starts the ADAS control loop.
@@ -476,7 +518,9 @@ class ADASController:
                 self.world.tick()
                 image = image_queue.get()
                 self.process_image(image)
-                spectator.set_transform(self.camera.get_transform())
+                # spectator.set_transform(self.camera.get_transform())
+                third_person_view = self.get_view()
+                spectator.set_transform(third_person_view)
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user. Stopping...")
@@ -516,18 +560,15 @@ def main():
     parser.add_argument("--host", type=str, default="localhost", help="CARLA server host address (default: localhost)")
     parser.add_argument("--port", type=int, default=2000, help="CARLA server port (default: 2000)")
     parser.add_argument("--yolo-model-path", type=str, default="yolov8n.pt", help="Path to the YOLO weights file (default: yolov8n.pt)")
-    parser.add_argument("--depth-model-path", type=str, default="fine-tuning/ml-depth-pro", help="Path to the Depth Pro model directory (default: /home/ubuntu/workset/CARLA2Real-ADAS/fine-tuning/ml-depth-pro)")
+    parser.add_argument("--depth-model-path", type=str, default="fine-tuning/Depth-Anything-V2", help="Path to the Depth Anything V2 model directory (default: /home/ubuntu/workset/CARLA2Real-ADAS/fine-tuning/Depth-Anything-V2)")
     parser.add_argument("--conf-threshold", type=float, default=0.40, help="Minimum confidence threshold for YOLO detections (default: 0.40)")
     parser.add_argument("--img-sz", type=int, default=1280, help="Image size for YOLO inference (default: 1280)")
     parser.add_argument("--cruise-throttle", type=float, default=0.35, help="Default throttle value for safe driving (default: 0.35)")
-    parser.add_argument("--warning-distance", type=float, default=15.0, help="Distance in meters to trigger a warning/slow down (default: 15.0)")
-    parser.add_argument("--brake-distance", type=float, default=7.0, help="Distance in meters to trigger emergency braking (default: 7.0)")
-    parser.add_argument("--lane-width", type=float, default=2, help="Physical width of the ego lane in meters (default: 2)")
+    parser.add_argument("--warning-distance", type=float, default=8.0, help="Distance in meters to trigger a warning/slow down (default: 15.0)")
+    parser.add_argument("--brake-distance", type=float, default=4.0, help="Distance in meters to trigger emergency braking (default: 7.0)")
+    parser.add_argument("--lane-width", type=float, default=3.5, help="Physical width of the ego lane in meters (default: 3.5)")
     parser.add_argument("--visualize", action="store_true", help="Enable visualization of the YOLO detections window")
     parser.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], help="Set the logging level (default: INFO)")
-    parser.add_argument("--use-depth-pro", action="store_true", help="Enable Depth Pro model inference")
-    parser.add_argument("--no-depth-pro", dest="use_depth_pro", action="store_false", help="Disable Depth Pro model inference")
-    parser.set_defaults(use_depth_pro=True)
 
     args = parser.parse_args()
 
@@ -546,7 +587,6 @@ def main():
         brake_distance=args.brake_distance,
         lane_width=args.lane_width,
         visualize=args.visualize,
-        use_depth_pro=args.use_depth_pro
     )
     adas_controller.run()
 
