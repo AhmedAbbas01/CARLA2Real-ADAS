@@ -1,30 +1,8 @@
 import logging
 import sys
 
-# ---------------------------------------------------------
-# Setup Logger
-# ---------------------------------------------------------
-def setup_logger(verbosity=logging.INFO):
-    """
-    Sets up the logger with the specified verbosity.
 
-    :param verbosity: Logging level (e.g., logging.INFO, logging.DEBUG).
-    :type verbosity: int
-    :return: Configured logger instance.
-    :rtype: logging.Logger
-    """
-    logger = logging.getLogger("ensemble_logger")
-    logger.setLevel(verbosity)
-    if not logger.handlers:
-        ch = logging.StreamHandler(sys.stdout)
-        ch.setLevel(verbosity)
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        ch.setFormatter(formatter)
-        logger.addHandler(ch)
-    return logger
-
-
-logger = setup_logger(logging.INFO)
+logger = logging.getLogger("Ensembler")
 
 # ---------------------------------------------------------
 # Handle Imports
@@ -35,11 +13,11 @@ try:
     from ultralytics import YOLO, RTDETR
     from ensemble_boxes import weighted_boxes_fusion
     from torchvision.models.detection import fasterrcnn_resnet50_fpn
-    from depth_anything_v2.dpt import DepthAnythingV2
+    from DepthAnythingV2.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
 except ImportError as e:
     logger.error(f"Missing import: {e}. Please install the required packages.")
+    logger.critical("DepthAnythingV2 module might not be found. Please clone the DepthAnythingV2 repository.")
     raise
-
 
 # ---------------------------------------------------------
 # Model Loading
@@ -65,6 +43,7 @@ def load_models(yolo_weights_path, rtdetr_weights_path, faster_rcnn_weights_path
     :return: A tuple containing the loaded (yolo_model, rtdetr_model, faster_rcnn_model, depth_model).
     :rtype: tuple
     """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     try:
         logger.info(f"Loading YOLO model from {yolo_weights_path}...")
         yolo_model = YOLO(yolo_weights_path)
@@ -74,9 +53,9 @@ def load_models(yolo_weights_path, rtdetr_weights_path, faster_rcnn_weights_path
 
         logger.info(f"Loading Faster R-CNN model from {faster_rcnn_weights_path} with {num_classes} classes...")
         faster_rcnn_model = fasterrcnn_resnet50_fpn(num_classes=num_classes)
-        checkpoint = torch.load(faster_rcnn_weights_path, map_location="cpu")
+        checkpoint = torch.load(faster_rcnn_weights_path, map_location=device)
         faster_rcnn_model.load_state_dict(checkpoint)
-        faster_rcnn_model.eval()
+        faster_rcnn_model.to(device).eval()
 
         logger.info(f"Loading DepthAnythingV2 metric depth model from {depth_weights_path}...")
         model_configs = {
@@ -85,8 +64,8 @@ def load_models(yolo_weights_path, rtdetr_weights_path, faster_rcnn_weights_path
             'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]}
         }
         depth_model = DepthAnythingV2(**{**model_configs[depth_encoder], 'max_depth': max_depth})
-        depth_model.load_state_dict(torch.load(depth_weights_path, map_location="cpu"))
-        depth_model.eval()
+        depth_model.load_state_dict(torch.load(depth_weights_path, map_location=device))
+        depth_model.to(device).eval()
 
         logger.info("Successfully loaded all object detection models.")
         return yolo_model, rtdetr_model, faster_rcnn_model, depth_model
@@ -123,7 +102,11 @@ def predict_yolo(model, image):
     for b in result.boxes:
         try:
             x1, y1, x2, y2 = b.xyxy[0].cpu().numpy()
-            boxes.append([x1 / w, y1 / h, x2 / w, y2 / h])
+            x1 = max(0.0, x1 / w)
+            y1 = max(0.0, y1 / h)
+            x2 = min(1.0, x2 / w)
+            y2 = min(1.0, y2 / h)
+            boxes.append([x1, y1, x2, y2])
             scores.append(float(b.conf))
             labels.append(int(b.cls))
         except Exception as e:
@@ -156,7 +139,11 @@ def predict_rtdetr(model, image):
     for b in result.boxes:
         try:
             x1, y1, x2, y2 = b.xyxy[0].cpu().numpy()
-            boxes.append([x1 / w, y1 / h, x2 / w, y2 / h])
+            x1 = max(0.0, x1 / w)
+            y1 = max(0.0, y1 / h)
+            x2 = min(1.0, x2 / w)
+            y2 = min(1.0, y2 / h)
+            boxes.append([x1, y1, x2, y2])
             scores.append(float(b.conf))
             labels.append(int(b.cls))
         except Exception as e:
@@ -179,8 +166,9 @@ def predict_faster(model, image, transform):
     :rtype: tuple(list, list, list)
     """
     logger.debug("Running Faster R-CNN inference...")
+    device = next(model.parameters()).device
     try:
-        img = transform(image).unsqueeze(0)
+        img = transform(image).unsqueeze(0).to(device)
         with torch.no_grad():
             pred = model(img)[0]
     except Exception as e:
@@ -193,7 +181,11 @@ def predict_faster(model, image, transform):
     for i in range(len(pred["boxes"])):
         try:
             x1, y1, x2, y2 = pred["boxes"][i].cpu().numpy()
-            boxes.append([x1 / w, y1 / h, x2 / w, y2 / h])
+            x1 = max(0.0, x1 / w)
+            y1 = max(0.0, y1 / h)
+            x2 = min(1.0, x2 / w)
+            y2 = min(1.0, y2 / h)
+            boxes.append([x1, y1, x2, y2])
             scores.append(float(pred["scores"][i]))
             labels.append(int(pred["labels"][i]))
         except Exception as e:

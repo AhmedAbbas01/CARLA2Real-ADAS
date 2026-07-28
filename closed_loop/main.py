@@ -5,7 +5,7 @@ import queue
 from perception import EnsemblePerception, SinglePerception
 from controller import ADASController
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
 logger = logging.getLogger("Main")
 
 def main():
@@ -16,7 +16,7 @@ def main():
     parser.add_argument("--yolo-model", type=str, default="yolov8n.pt", help="Path to YOLO weights")
     parser.add_argument("--rtdetr-model", type=str, default="rtdetr.pt", help="Path to RT-DETR weights")
     parser.add_argument("--faster-model", type=str, default="faster_rcnn.pth", help="Path to Faster R-CNN weights")
-    parser.add_argument("--depth-model", type=str, default="DepthAnythingV2/checkpoints/depth_anything_v2_metric_hypersim_vits.pth", help="Path to Depth model weights")
+    parser.add_argument("--depth-model", type=str, default="depth_anything_v2_metric_hypersim_vits.pth", help="Path to Depth model weights")
     parser.add_argument("--num-classes", type=int, default=8, help="Number of classes for Faster R-CNN")
     parser.add_argument("--conf-threshold", type=float, default=0.40, help="Confidence threshold for YOLO")
     parser.add_argument("--cruise-throttle", type=float, default=0.35, help="Cruise control throttle")
@@ -76,6 +76,7 @@ def main():
 
         image_queue = queue.Queue()
         controller.camera.listen(image_queue.put)
+        spectator = controller.world.get_spectator()
 
         logger.info("Closed-loop ADAS running in SYNC mode. Press Ctrl+C to stop.")
 
@@ -83,11 +84,14 @@ def main():
             controller.world.tick()
             image = image_queue.get()
             controller.process_image(image)
+            spectator.set_transform(controller.get_third_person_camera_transform())
             
     except KeyboardInterrupt:
         logger.info("Interrupted by user. Stopping...")
     except Exception as e:
         logger.error("An unexpected error occurred in run loop: %s", e, exc_info=True)
+    finally:
+        controller.cleanup()
 
 if __name__ == "__main__":
     main()

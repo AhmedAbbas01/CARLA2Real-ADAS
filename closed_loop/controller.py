@@ -162,7 +162,7 @@ class ADASController:
         try:
             array = np.frombuffer(image.raw_data, dtype=np.uint8)
             array = array.reshape((image.height, image.width, 4))
-            frame = array[:, :, :3]
+            frame = array[:, :, :3].copy()
 
             boxes, scores, labels, distances = self.perception.predict(frame)
             throttle, brake, danger, obj, detected_objects = self.calculate_control(
@@ -183,5 +183,112 @@ class ADASController:
             else:
                 logger.debug(f"No obstacle | Th={throttle:.2f} Br={brake:.2f} St={steer:.2f}")
 
+            if danger == 2:
+                text = "EMERGENCY BRAKE"
+                color = (0, 0, 255)
+            elif danger == 1:
+                text = "WARNING / BRAKING"
+                color = (0, 165, 255)  # Orange
+            else:
+                text = "SAFE"
+                color = (0, 255, 0)
+
+            logger.info(f"{text} | Throttle: {throttle:.2f}  Brake: {brake:.2f}  Steer: {steer:.2f}")
+            
+            if self.visualize:
+                self.show_visualization(frame, detected_objects, text, color, throttle, brake, steer)
+
         except Exception as e:
             logger.error("Error occurred during image processing: %s", e, exc_info=True)
+
+    def show_visualization(self, frame, detected_objects, text, color, throttle, brake, steer=0.0):
+        """
+        Annotates the frame with detection boxes and vehicle telemetry logic.
+        
+        :param frame: The current RGB image frame.
+        :type frame: numpy.ndarray
+        :param detected_objects: List of detected objects with class and distance.
+        :type detected_objects: list
+        :param color: color to show the danger level.
+        :type color: RGB tuple
+        :param text: text representing the danger level.
+        :type text: str
+        :param throttle: Current throttle value.
+        :type throttle: float
+        :param brake: Current brake value.
+        :type brake: float
+        :param steer: Current steer value.
+        :type steer: float
+        """
+        annotated = frame.copy()
+
+        for obj in detected_objects:
+            if obj['class'] not in self.danger_classes:
+                continue
+
+            x1, y1, x2, y2 = obj["box"]
+            label = f"{obj['class']} {obj['distance']:.1f}m (Lat: {obj['lateral_distance']:.1f}m)"
+            
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(annotated, (x1, y1 - text_h - baseline - 5), (x1 + text_w, y1), (0, 255, 0), -1)
+            cv2.putText(annotated, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+
+        cv2.putText(annotated, text, (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 3)
+        cv2.putText(
+            annotated,
+            f"Throttle: {throttle:.2f}  Brake: {brake:.2f}  Steer: {steer:.2f}",
+            (40, 110),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (255, 255, 255),
+            2
+        )
+
+        cv2.imshow("YOLO Closed-Loop ADAS", annotated)
+        cv2.waitKey(1)
+
+    def get_third_person_camera_transform(self):
+        import math
+        # 1. Get the current position of the vehicle
+        vehicle_transform = self.vehicle.get_transform()
+        vehicle_loc = vehicle_transform.location
+        vehicle_rot = vehicle_transform.rotation
+
+        # 2. Calculate third-person offset (yaw matches the car)
+        # Convert yaw to radians to calculate X and Y vector offsets
+        yaw_rad = math.radians(vehicle_rot.yaw)
+        
+        # Position the spectator 8 meters behind and 3.5 meters above the car
+        spectator_x = vehicle_loc.x - 8.0 * math.cos(yaw_rad)
+        spectator_y = vehicle_loc.y - 8.0 * math.sin(yaw_rad)
+        spectator_z = vehicle_loc.z + 3.5
+
+        # 3. Angle the spectator slightly downward (-15 degrees pitch)
+        spectator_transform = carla.Transform(
+            carla.Location(x=spectator_x, y=spectator_y, z=spectator_z),
+            carla.Rotation(pitch=-15.0, yaw=vehicle_rot.yaw, roll=0.0)
+        )
+        return spectator_transform
+
+    def cleanup(self):
+        """
+        Stops sensors and destroys all spawned CARLA actors to clean up the simulation.
+        """
+        if self.world is not None:
+            settings = self.world.get_settings()
+            settings.synchronous_mode = False
+            self.world.apply_settings(settings)
+
+        logger.info("Cleaning up CARLA actors...")
+        if self.camera and self.camera.is_alive:
+            self.camera.stop()
+            self.camera.destroy()
+            logger.info("Camera destroyed.")
+
+        if self.vehicle and self.vehicle.is_alive:
+            self.vehicle.destroy()
+            logger.info("Vehicle destroyed.")
+
+        cv2.destroyAllWindows()
+        logger.info("Cleanup finished.")

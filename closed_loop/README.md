@@ -26,8 +26,9 @@ Ensure you have the required weights downloaded and placed in the appropriate di
 You can execute the simulation using the provided shell script, which cleanly exposes all necessary configurations for the ADAS system:
 
 ```bash
-./run_adas_ensemble.sh
+./run_adas_ensemble.sh --visualize
 ```
+> Note: `--visualize` is optional and can be passed to toggle the OpenCV visualizer to monitor detections and real-time telemetry.
 
 ### Key Parameters
 
@@ -39,7 +40,6 @@ You can execute the simulation using the provided shell script, which cleanly ex
 | `--brake-distance` | `7.0` | Distance threshold (meters) to trigger emergency braking. |
 | `--lane-width` | `3.5` | Physical ego-lane width (meters) used to filter out adjacent-lane objects. |
 | `--max-speed` | `30.0` | Maximum safe cruising speed in km/h. |
-| `--visualize` | `False` | Toggles the OpenCV visualizer to monitor detections and real-time telemetry. |
 
 ## Limitations
 
