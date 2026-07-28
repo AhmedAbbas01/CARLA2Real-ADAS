@@ -3,8 +3,8 @@
 # Wrapper script to run the CARLA ADAS closed-loop module directly
 
 YOLO_MODEL="/home/ubuntu/Downloads/best_yolov8n.pt"
-RTDETR_MODEL="/home/ubuntu/workset/CARLA2Real-ADAS/fine-tuning/runs/rtdetr-l_detect/weights/best.pt"
-FASTER_MODEL="/home/ubuntu/workset/CARLA2Real-ADAS/fine-tuning/runs/faster_rcnn/best.pth"
+# RTDETR_MODEL="/home/ubuntu/workset/CARLA2Real-ADAS/fine-tuning/runs/rtdetr-l_detect/weights/best.pt"
+# FASTER_MODEL="/home/ubuntu/workset/CARLA2Real-ADAS/fine-tuning/runs/faster_rcnn/best.pth"
 DEPTH_MODEL="DepthAnythingV2/checkpoints/depth_anything_v2_metric_hypersim_vits.pth"
 
 python3 main.py \

@@ -44,35 +44,48 @@ def load_models(yolo_weights_path, rtdetr_weights_path, faster_rcnn_weights_path
     :rtype: tuple
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    try:
-        logger.info(f"Loading YOLO model from {yolo_weights_path}...")
-        yolo_model = YOLO(yolo_weights_path)
+    yolo_model, rtdetr_model, faster_rcnn_model, depth_model = None, None, None, None
 
-        logger.info(f"Loading RT-DETR model from {rtdetr_weights_path}...")
-        rtdetr_model = RTDETR(rtdetr_weights_path)
+    if yolo_weights_path:
+        try:
+            logger.info(f"Loading YOLO model from {yolo_weights_path}...")
+            yolo_model = YOLO(yolo_weights_path)
+        except Exception as e:
+            logger.error(f"Failed to load YOLO model: {e}")
 
-        logger.info(f"Loading Faster R-CNN model from {faster_rcnn_weights_path} with {num_classes} classes...")
-        faster_rcnn_model = fasterrcnn_resnet50_fpn(num_classes=num_classes)
-        checkpoint = torch.load(faster_rcnn_weights_path, map_location=device)
-        faster_rcnn_model.load_state_dict(checkpoint)
-        faster_rcnn_model.to(device).eval()
+    if rtdetr_weights_path:
+        try:
+            logger.info(f"Loading RT-DETR model from {rtdetr_weights_path}...")
+            rtdetr_model = RTDETR(rtdetr_weights_path)
+        except Exception as e:
+            logger.error(f"Failed to load RT-DETR model: {e}")
 
-        logger.info(f"Loading DepthAnythingV2 metric depth model from {depth_weights_path}...")
-        model_configs = {
-            'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
-            'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
-            'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]}
-        }
-        depth_model = DepthAnythingV2(**{**model_configs[depth_encoder], 'max_depth': max_depth})
-        depth_model.load_state_dict(torch.load(depth_weights_path, map_location=device))
-        depth_model.to(device).eval()
+    if faster_rcnn_weights_path:
+        try:
+            logger.info(f"Loading Faster R-CNN model from {faster_rcnn_weights_path} with {num_classes} classes...")
+            faster_rcnn_model = fasterrcnn_resnet50_fpn(num_classes=num_classes)
+            checkpoint = torch.load(faster_rcnn_weights_path, map_location=device)
+            faster_rcnn_model.load_state_dict(checkpoint)
+            faster_rcnn_model.to(device).eval()
+        except Exception as e:
+            logger.error(f"Failed to load Faster R-CNN model: {e}")
 
-        logger.info("Successfully loaded all object detection models.")
-        return yolo_model, rtdetr_model, faster_rcnn_model, depth_model
+    if depth_weights_path:
+        try:
+            logger.info(f"Loading DepthAnythingV2 metric depth model from {depth_weights_path}...")
+            model_configs = {
+                'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
+                'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
+                'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]}
+            }
+            depth_model = DepthAnythingV2(**{**model_configs[depth_encoder], 'max_depth': max_depth})
+            depth_model.load_state_dict(torch.load(depth_weights_path, map_location=device))
+            depth_model.to(device).eval()
+        except Exception as e:
+            logger.error(f"Failed to load DepthAnythingV2 model: {e}")
 
-    except Exception as e:
-        logger.error(f"An error occurred while loading the object detection models: {e}")
-        raise
+    logger.info("Finished loading available object detection models.")
+    return yolo_model, rtdetr_model, faster_rcnn_model, depth_model
 
 
 # ---------------------------------------------------------
@@ -89,6 +102,9 @@ def predict_yolo(model, image):
     :return: Tuple containing (boxes, scores, labels).
     :rtype: tuple(list, list, list)
     """
+    if model is None:
+        return [], [], []
+
     logger.debug("Running YOLO inference...")
     try:
         result = model.predict(image, verbose=False)[0]
@@ -126,6 +142,9 @@ def predict_rtdetr(model, image):
     :return: Tuple containing (boxes, scores, labels).
     :rtype: tuple(list, list, list)
     """
+    if model is None:
+        return [], [], []
+
     logger.debug("Running RT-DETR inference...")
     try:
         result = model.predict(image, verbose=False)[0]
@@ -165,6 +184,9 @@ def predict_faster(model, image, transform):
     :return: Tuple containing (boxes, scores, labels).
     :rtype: tuple(list, list, list)
     """
+    if model is None:
+        return [], [], []
+
     logger.debug("Running Faster R-CNN inference...")
     device = next(model.parameters()).device
     try:
@@ -205,6 +227,9 @@ def predict_depth(model, image):
     :return: Depth map array (H, W).
     :rtype: np.ndarray
     """
+    if model is None:
+        return None
+
     logger.debug("Running DepthAnythingV2 inference...")
     try:
         depth_map = model.infer_image(image)
@@ -237,15 +262,34 @@ def ensemble_prediction(yolo_model, rtdetr_model, faster_model, depth_model, ima
     :return: Tuple containing fused (boxes, scores, labels, distances).
     :rtype: tuple(list, list, list, list)
     """
-    logger.info("Executing ensemble predictions...")
+    logger.debug("Executing ensemble predictions...")
 
-    y_boxes, y_scores, y_labels = predict_yolo(yolo_model, image)
-    r_boxes, r_scores, r_labels = predict_rtdetr(rtdetr_model, image)
-    f_boxes, f_scores, f_labels = predict_faster(faster_model, image, transform)
+    boxes, scores, labels, weights = [], [], [], []
 
-    boxes = [y_boxes, r_boxes, f_boxes]
-    scores = [y_scores, r_scores, f_scores]
-    labels = [y_labels, r_labels, f_labels]
+    if yolo_model is not None:
+        y_boxes, y_scores, y_labels = predict_yolo(yolo_model, image)
+        boxes.append(y_boxes)
+        scores.append(y_scores)
+        labels.append(y_labels)
+        weights.append(2)
+
+    if rtdetr_model is not None:
+        r_boxes, r_scores, r_labels = predict_rtdetr(rtdetr_model, image)
+        boxes.append(r_boxes)
+        scores.append(r_scores)
+        labels.append(r_labels)
+        weights.append(2)
+
+    if faster_model is not None:
+        f_boxes, f_scores, f_labels = predict_faster(faster_model, image, transform)
+        boxes.append(f_boxes)
+        scores.append(f_scores)
+        labels.append(f_labels)
+        weights.append(1)
+
+    if not boxes:
+        logger.warning("No object detection models available for ensemble.")
+        return [], [], [], []
 
     try:
         logger.debug("Fusing bounding boxes using weighted_boxes_fusion...")
@@ -253,7 +297,7 @@ def ensemble_prediction(yolo_model, rtdetr_model, faster_model, depth_model, ima
             boxes,
             scores,
             labels,
-            weights=[2, 2, 1],  # YOLO and RT-DETR trusted more
+            weights=weights,
             iou_thr=0.55,
             skip_box_thr=0.25
         )

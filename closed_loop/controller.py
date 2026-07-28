@@ -49,7 +49,8 @@ class ADASController:
 
     def spawn_actors(self):
         blueprints = self.world.get_blueprint_library()
-        vehicle_bps = blueprints.filter("vehicle.*")
+        exclude_ids = ["vehicle.firetruck.actors", "vehicle.sprinter.mercedes", "vehicle.ambulance.ford", "vehicle.carlacola.actors"]
+        vehicle_bps = [bp for bp in blueprints.filter('vehicle.*') if bp.id not in exclude_ids]
 
         if not vehicle_bps:
             logger.error("No vehicle blueprints available in this CARLA world.")
@@ -283,12 +284,16 @@ class ADASController:
         logger.info("Cleaning up CARLA actors...")
         if self.camera and self.camera.is_alive:
             self.camera.stop()
-            self.camera.destroy()
-            logger.info("Camera destroyed.")
 
-        if self.vehicle and self.vehicle.is_alive:
-            self.vehicle.destroy()
-            logger.info("Vehicle destroyed.")
+        if self.client and self.world:
+            actors = self.world.get_actors()
+            destroy_batch = [
+                carla.command.DestroyActor(x) for x in actors 
+                if x.type_id.startswith(('vehicle.', 'sensor.', 'walker.', 'controller.'))
+            ]
+            if destroy_batch:
+                self.client.apply_batch(destroy_batch)
+                logger.info("Destroyed %d actors.", len(destroy_batch))
 
         cv2.destroyAllWindows()
         logger.info("Cleanup finished.")
