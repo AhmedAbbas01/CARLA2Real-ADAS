@@ -5,8 +5,6 @@ import queue
 from perception import EnsemblePerception, SinglePerception
 from controller import ADASController
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
-logger = logging.getLogger("Main")
 
 def main():
     parser = argparse.ArgumentParser(description="Closed-Loop ADAS script for CARLA.")
@@ -28,7 +26,9 @@ def main():
     parser.add_argument("--log-level", type=str, default="INFO")
 
     args = parser.parse_args()
-    logger.setLevel(getattr(logging, args.log_level.upper()))
+    numeric_level = getattr(logging, args.log_level.upper(), None)
+    logging.basicConfig(level=numeric_level, format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s")
+    logger = logging.getLogger("Main")
 
     # Initialize Perception Modality
     if args.mode == "ensemble":
