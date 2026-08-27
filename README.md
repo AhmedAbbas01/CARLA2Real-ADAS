@@ -1,3 +1,5 @@
+<div align="center">
+
 # Carla2Real-ADAS: A Simulation-to-Real Transfer Framework for Vision-Based ADAS
 
 [![Status](https://img.shields.io/badge/Status-Active-brightgreen)](https://github.com/AhmedAbbas01/CARLA2Real-ADAS)
@@ -6,13 +8,14 @@
 [![Paper](https://img.shields.io/badge/CARLA2Real-ADAS-Paper?logo=overleaf)](https://www.overleaf.com/project/6a33bf0a6f60235b4edfefdd)
 [![Stefanos](https://img.shields.io/badge/BasedOn-CARLA2Real-lightgrey?logo=github)](https://github.com/stefanos50/CARLA2Real/tree/main)
 
-
-**Authors:** Ahmed M. Abbas, Mohamed Adel  
+**Authors:** Ahmed M. Abbas, Mohamed Adel<br>
 **Affiliation:** Information Technology and Computer Science School, Nile University, Giza, Egypt
 
-This project was originated to show the code and expirements done for the paper *"Carla2Real-ADAS: A Simulation-to-Real Transfer Framework for Vision-Based ADAS Using Synthetic Data and Object Detection"*
+</div>
 
-![Overall pipeline](docs/overall.png)
+This project was originated to show the code and experiments done for the paper *"Carla2Real-ADAS: A Simulation-to-Real Transfer Framework for Vision-Based ADAS Using Synthetic Data and Object Detection"*
+
+![Overall pipeline](docs/overall3.jpg)
 
 ## Introduction
 
@@ -36,7 +39,7 @@ The following comparison highlights the original CARLA scene alongside the enhan
     <td align="center"><b>Enhanced image with bounding boxes and distance annotations</b></td>
   </tr>
   <tr>
-    <td><img src="docs/2.png" width="420" alt="Original CARLA image"></td>
+    <td><img src="docs/carla_original.png" width="420" alt="Original CARLA image"></td>
     <td><img src="docs/visualized_FinalColor-2.png" width="420" alt="Enhanced visualization"></td>
   </tr>
 </table>
@@ -46,6 +49,7 @@ The following comparison highlights the original CARLA scene alongside the enhan
 
 - `carla_unreal_engine_5/`: Contains Python scripts for dataset generation based on Carla2Real pipeline (G-buffer extraction and their model inference to enhance the carla images)
 - `fine-tuning`: Contains Python scripts for Finetuning preparation and inference of object detection models (YOLOv8, RT-DETR, Faster R-CNN)
+- `closed_loop/`: Contains the real-time, vision-based Advanced Driver Assistance System (ADAS) module for the CARLA simulator (perception, control, and object detection ensembles).
 - `Dataset/`: Contains the extracted data, organized by map and weather condition (e.g., `Town10HD_Opt_ClearNoon` represents the `Town10HD_Opt` map under `ClearNoon` weather).
   * **Extracted CARLA Data**: Each folder contains `BoundingBoxes`, `Frames`, `GBuffers`, and `SemanticSegmentation`.
   * **Carla2Real Output**: Each folder contains `Carla2Kitti` folder, representing Carla2Real output in KITTI format.
@@ -57,11 +61,31 @@ The following comparison highlights the original CARLA scene alongside the enhan
 - `extract_dataset.sh`: A helper bash script used to extract the dataset from Carla with different weather conditions automatically
 - `full_pipeline.sh`: A helper bash script used to show how to trigger the whole pipeline, assuming the database is already collected, and it doesn't require CARLA to run or a graphical connection.
 
+## Closed-Loop System Outputs
+
+The `closed_loop/` module introduces real-time obstacle avoidance and emergency braking by utilizing object detection and metric depth estimation. As obstacles are introduced, the Ego controller dynamically adjusts the vehicle's telemetry, transitioning through different safety states:
+
+```bash
+# from: SAFE
+Throttle=0.35 Brake=0.00
+# to: WARNING / BRAKING
+Throttle=0.00 Brake=0.40
+# and finally: EMERGENCY BRAKE
+Throttle=0.00 Brake=1.00
+```
+These values result in the CARLA ego vehicle physically decelerating and coming to a complete stop when encountering an obstacle.
+
+<p align="center">
+  <img src="docs/Closed-loop.jpg" alt="Closed-loop results" width="600">
+</p>
+
 ## Getting Started
 
 Please refer to the internal README at [`carla_unreal_engine_5/README.md`](carla_unreal_engine_5/README.md) for detailed instructions on launching the simulator, data generation, preprocessing, running the photorealistic inference, and visualizing the outputs.
 
 Please refer to the internal README at [`fine-tuning/README.md`](fine-tuning/README.md) for detailed instructions on Fine-Tuning the object detection models and the rest of our pipeline.
+
+Please refer to the internal README at [`closed_loop/README.md`](closed_loop/README.md) for detailed instructions on configuring and executing the closed-loop ADAS simulation.
 
 ## License
 
