@@ -1,1 +1,5 @@
+# First weights (obsoleted)
 https://drive.google.com/drive/folders/1xQgaajfaRyOlAOcXx7XEDBKCZYhQLYTS?usp=drive_link
+
+# Latest weights
+https://drive.google.com/drive/folders/1bRpk5F7_AqKMG0TcxcnDEY3OEIwQPrUi?usp=drive_link
