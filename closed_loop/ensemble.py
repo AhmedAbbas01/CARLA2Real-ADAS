@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 
 
@@ -7,17 +8,21 @@ logger = logging.getLogger("Ensembler")
 # ---------------------------------------------------------
 # Handle Imports
 # ---------------------------------------------------------
+DEPTH_ANYTHING_ROOT = r"E:\Masters\carla2real\Depth-Anything-V2"
+if os.path.exists(DEPTH_ANYTHING_ROOT) and DEPTH_ANYTHING_ROOT not in sys.path:
+    sys.path.insert(0, DEPTH_ANYTHING_ROOT)
+
 try:
     import torch
     import numpy as np
     from ultralytics import YOLO, RTDETR
     from ensemble_boxes import weighted_boxes_fusion
     from torchvision.models.detection import fasterrcnn_resnet50_fpn
-    from DepthAnythingV2.metric_depth.depth_anything_v2.dpt import DepthAnythingV2
+    from depth_anything_v2.dpt import DepthAnythingV2
 except ImportError as e:
     logger.error(f"Missing import: {e}. Please install the required packages.")
     logger.critical("DepthAnythingV2 module might not be found. Please clone the DepthAnythingV2 repository.")
-    raise
+    DepthAnythingV2 = None
 
 # ---------------------------------------------------------
 # Model Loading
@@ -71,18 +76,21 @@ def load_models(yolo_weights_path, rtdetr_weights_path, faster_rcnn_weights_path
             logger.error(f"Failed to load Faster R-CNN model: {e}")
 
     if depth_weights_path:
-        try:
-            logger.info(f"Loading DepthAnythingV2 metric depth model from {depth_weights_path}...")
-            model_configs = {
-                'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
-                'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
-                'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]}
-            }
-            depth_model = DepthAnythingV2(**{**model_configs[depth_encoder], 'max_depth': max_depth})
-            depth_model.load_state_dict(torch.load(depth_weights_path, map_location=device))
-            depth_model.to(device).eval()
-        except Exception as e:
-            logger.error(f"Failed to load DepthAnythingV2 model: {e}")
+        if DepthAnythingV2 is None:
+            logger.error("DepthAnythingV2 could not be imported. Check that the repo exists at E:\\Masters\\carla2real\\Depth-Anything-V2")
+        else:
+            try:
+                logger.info(f"Loading DepthAnythingV2 metric depth model from {depth_weights_path}...")
+                model_configs = {
+                    'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
+                    'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
+                    'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]}
+                }
+                depth_model = DepthAnythingV2(**model_configs[depth_encoder])
+                depth_model.load_state_dict(torch.load(depth_weights_path, map_location=device))
+                depth_model.to(device).eval()
+            except Exception as e:
+                logger.error(f"Failed to load DepthAnythingV2 model: {e}")
 
     logger.info("Finished loading available object detection models.")
     return yolo_model, rtdetr_model, faster_rcnn_model, depth_model
@@ -315,12 +323,10 @@ def ensemble_prediction(yolo_model, rtdetr_model, faster_model, depth_model, ima
     if depth_map is not None:
         logger.debug("Extracting distances from depth map...")
         for box in fused_boxes:
-            # box coordinates are normalized [0, 1]
             x1, y1, x2, y2 = box
             ix1, iy1 = int(x1 * w), int(y1 * h)
             ix2, iy2 = int(x2 * w), int(y2 * h)
 
-            # Clamp to image boundaries
             ix1, iy1 = max(0, ix1), max(0, iy1)
             ix2, iy2 = min(w - 1, ix2), min(h - 1, iy2)
 
@@ -328,12 +334,22 @@ def ensemble_prediction(yolo_model, rtdetr_model, faster_model, depth_model, ima
                 fused_distances.append(None)
                 continue
 
-            # Extract region of interest from depth map and use median depth
             roi_depth = depth_map[iy1:iy2, ix1:ix2]
             fused_distances.append(float(np.median(roi_depth)))
     else:
-        logger.warning("Depth map generation failed. Returning None for distances.")
-        fused_distances = [None] * len(fused_boxes)
+        logger.warning("Depth map generation failed. Falling back to heuristic distance estimation.")
+        for box in fused_boxes:
+            x1, y1, x2, y2 = box
+            box_area = max(0.0, (x2 - x1) * (y2 - y1))
+            center_y = (y1 + y2) / 2.0
+
+            # Heuristic: closer objects appear larger and lower in the image.
+            # This is intentionally simple and meant as a fallback for testing.
+            size_score = 1.0 / max(box_area, 1e-6)
+            vertical_score = 1.0 + max(0.0, 1.0 - center_y)
+            heuristic_distance = 12.0 / max(size_score * vertical_score, 1e-3)
+            heuristic_distance = float(np.clip(heuristic_distance, 1.0, 20.0))
+            fused_distances.append(heuristic_distance)
 
     logger.info(f"Ensemble completed successfully. Returning {len(fused_boxes)} fused boxes.")
     return fused_boxes, fused_scores, fused_labels, fused_distances

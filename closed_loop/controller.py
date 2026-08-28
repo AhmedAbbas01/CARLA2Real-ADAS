@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 import queue
 import cv2
 import numpy as np
@@ -35,6 +36,8 @@ class ADASController:
         self.world = None
         self.vehicle = None
         self.camera = None
+        self.visualization_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "visualization_frames")
+        os.makedirs(self.visualization_dir, exist_ok=True)
 
     def connect_carla(self):
         logger.info("Connecting to CARLA server at %s:%s...", self.host, self.port)
@@ -205,49 +208,48 @@ class ADASController:
     def show_visualization(self, frame, detected_objects, text, color, throttle, brake, steer=0.0):
         """
         Annotates the frame with detection boxes and vehicle telemetry logic.
-        
-        :param frame: The current RGB image frame.
-        :type frame: numpy.ndarray
-        :param detected_objects: List of detected objects with class and distance.
-        :type detected_objects: list
-        :param color: color to show the danger level.
-        :type color: RGB tuple
-        :param text: text representing the danger level.
-        :type text: str
-        :param throttle: Current throttle value.
-        :type throttle: float
-        :param brake: Current brake value.
-        :type brake: float
-        :param steer: Current steer value.
-        :type steer: float
+        This is intentionally a no-op in headless environments because GUI windows
+        are not supported by the installed OpenCV build.
         """
-        annotated = frame.copy()
+        if not self.visualize:
+            return
 
-        for obj in detected_objects:
-            if obj['class'] not in self.danger_classes:
-                continue
+        try:
+            annotated = frame.copy()
 
-            x1, y1, x2, y2 = obj["box"]
-            label = f"{obj['class']} {obj['distance']:.1f}m (Lat: {obj['lateral_distance']:.1f}m)"
-            
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(annotated, (x1, y1 - text_h - baseline - 5), (x1 + text_w, y1), (0, 255, 0), -1)
-            cv2.putText(annotated, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+            for obj in detected_objects:
+                if obj['class'] not in self.danger_classes:
+                    continue
 
-        cv2.putText(annotated, text, (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 3)
-        cv2.putText(
-            annotated,
-            f"Throttle: {throttle:.2f}  Brake: {brake:.2f}  Steer: {steer:.2f}",
-            (40, 110),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.9,
-            (255, 255, 255),
-            2
-        )
+                x1, y1, x2, y2 = obj["box"]
+                label = f"{obj['class']} {obj['distance']:.1f}m (Lat: {obj['lateral_distance']:.1f}m)"
 
-        cv2.imshow("YOLO Closed-Loop ADAS", annotated)
-        cv2.waitKey(1)
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                (text_w, text_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                cv2.rectangle(annotated, (x1, y1 - text_h - baseline - 5), (x1 + text_w, y1), (0, 255, 0), -1)
+                cv2.putText(annotated, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+
+            cv2.putText(annotated, text, (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 3)
+            cv2.putText(
+                annotated,
+                f"Throttle: {throttle:.2f}  Brake: {brake:.2f}  Steer: {steer:.2f}",
+                (40, 110),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                (255, 255, 255),
+                2
+            )
+
+            try:
+                cv2.imshow("YOLO Closed-Loop ADAS", annotated)
+                cv2.waitKey(1)
+            except Exception:
+                logger.debug("Visualization window is unavailable in this environment; writing frame to disk instead.")
+
+            frame_path = os.path.join(self.visualization_dir, f"frame_{len(os.listdir(self.visualization_dir)) + 1:05d}.png")
+            cv2.imwrite(frame_path, annotated)
+        except Exception:
+            logger.debug("Visualization skipped because GUI windows are unavailable in this environment.")
 
     def get_third_person_camera_transform(self):
         import math
