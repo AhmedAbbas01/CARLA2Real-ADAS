@@ -4,6 +4,8 @@ import queue
 import cv2
 import numpy as np
 import sys
+import os
+import json
 
 try:
     import carla
@@ -271,6 +273,133 @@ class ADASController:
             carla.Rotation(pitch=-15.0, yaw=vehicle_rot.yaw, roll=0.0)
         )
         return spectator_transform
+
+    def get_gt_objects(self, K, image_w, image_h):
+        gt_objects = []
+        camera_transform = self.camera.get_transform()
+        w2c = np.array(camera_transform.get_inverse_matrix())
+        ego_location = camera_transform.location
+        ego_forward = camera_transform.get_forward_vector()
+
+        actors = self.world.get_actors()
+        vehicles = actors.filter('vehicle.*')
+        walkers = actors.filter('walker.pedestrian.*')
+        
+        for actor in list(vehicles) + list(walkers):
+            if self.vehicle and actor.id == self.vehicle.id:
+                continue
+                
+            dist = actor.get_transform().location.distance(ego_location)
+            if dist > 50:
+                continue
+            ray = actor.get_transform().location - ego_location
+            if ego_forward.dot(ray) <= 0:
+                continue
+
+            try:
+                bb = actor.bounding_box
+            except AttributeError:
+                continue
+
+            verts = [v for v in bb.get_world_vertices(actor.get_transform())]
+            verts_2d = []
+            for vert in verts:
+                p_world = np.array([vert.x, vert.y, vert.z, 1.0])
+                p_camera = np.dot(w2c, p_world)
+                p_cam_std = [p_camera[1], -p_camera[2], p_camera[0]]
+                
+                if p_cam_std[2] <= 0:
+                    continue
+                
+                p_img = np.dot(K, p_cam_std)
+                p_img[0] /= p_img[2]
+                p_img[1] /= p_img[2]
+                verts_2d.append(p_img[:2])
+                
+            if len(verts_2d) == 0:
+                continue
+                
+            verts_2d = np.array(verts_2d)
+            x_min = np.min(verts_2d[:, 0])
+            x_max = np.max(verts_2d[:, 0])
+            y_min = np.min(verts_2d[:, 1])
+            y_max = np.max(verts_2d[:, 1])
+            
+            x_min = max(0.0, min(x_min, float(image_w)))
+            x_max = max(0.0, min(x_max, float(image_w)))
+            y_min = max(0.0, min(y_min, float(image_h)))
+            y_max = max(0.0, min(y_max, float(image_h)))
+
+            if x_max <= x_min or y_max <= y_min:
+                continue
+
+            if 'vehicle' in actor.type_id:
+                class_name = 'Car'
+                if 'truck' in actor.type_id:
+                    class_name = 'Truck'
+                elif 'bus' in actor.type_id:
+                    class_name = 'Bus'
+                elif 'motorcycle' in actor.type_id:
+                    class_name = 'Motorcycle'
+                elif 'bicycle' in actor.type_id:
+                    class_name = 'Bicycle'
+            else:
+                class_name = 'Pedestrians'
+
+            gt_objects.append({
+                'bbox': [float(x_min), float(y_min), float(x_max), float(y_max)],
+                'class': class_name,
+                'distance': float(dist)
+            })
+            
+        return gt_objects
+
+    def evaluate_distance(self, image, frame_count, evaluator):
+        try:
+            array = np.frombuffer(image.raw_data, dtype=np.uint8)
+            array = array.reshape((image.height, image.width, 4))
+            frame = array[:, :, :3].copy()
+
+            boxes, scores, labels, distances = self.perception.predict(frame)
+            
+            pred_objects = []
+            for box, score, label, dist in zip(boxes, scores, labels, distances):
+                if dist is not None:
+                    pred_objects.append({
+                        'bbox': [float(x) for x in box],
+                        'class': self.perception.get_class_name(label),
+                        'distance': float(dist)
+                    })
+            
+            image_w = image.width
+            image_h = image.height
+            fov = image.fov
+            focal = image_w / (2.0 * np.tan(fov * np.pi / 360.0))
+            K = np.identity(3)
+            K[0, 0] = K[1, 1] = focal
+            K[0, 2] = image_w / 2.0
+            K[1, 2] = image_h / 2.0
+            
+            gt_objects = self.get_gt_objects(K, image_w, image_h)
+            
+            metrics = evaluator.add_frame_predictions(gt_objects, pred_objects)
+            
+            if metrics:
+                logger.info(f"Frame {frame_count:04d} | Matches: {metrics['frame_matches']} | "
+                            f"Frame MAE: {metrics['frame_mae']:.2f}m | Running MAE: {metrics['running_mae']:.2f}m")
+            
+            log_data = {
+                "frame_id": frame_count,
+                "ground_truth": gt_objects,
+                "predictions": pred_objects
+            }
+            
+            os.makedirs("evaluation_logs", exist_ok=True)
+            with open(os.path.join("evaluation_logs", f"frame_{frame_count:04d}.json"), "w") as f:
+                json.dump(log_data, f, indent=4)
+                
+        except Exception as e:
+            logger.error("Error occurred during distance evaluation: %s", e, exc_info=True)
 
     def cleanup(self):
         """

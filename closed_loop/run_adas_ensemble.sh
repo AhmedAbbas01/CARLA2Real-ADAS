@@ -8,7 +8,7 @@ YOLO_MODEL="/home/ubuntu/Downloads/best_yolov8n.pt"
 DEPTH_MODEL="DepthAnythingV2/checkpoints/depth_anything_v2_metric_hypersim_vits.pth"
 
 python3 main.py \
-    --mode ensemble \
+    --perception_mode ensemble \
     --host localhost \
     --port 2000 \
     --log-level INFO \

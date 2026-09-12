@@ -1,14 +1,19 @@
 import argparse
 import logging
 import sys
+import os
 import queue
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models_evaluation")))
+from evaluate_distance import DistanceEvaluator
 from perception import EnsemblePerception, SinglePerception
 from controller import ADASController
 
 
 def main():
     parser = argparse.ArgumentParser(description="Closed-Loop ADAS script for CARLA.")
-    parser.add_argument("--mode", type=str, choices=["single", "ensemble"], default="ensemble", help="Perception mode")
+    parser.add_argument("--perception_mode", type=str, choices=["single", "ensemble"], default="ensemble", help="Perception mode")
+    parser.add_argument("--running_mode", type=str, choices=["evaluate_distance_model", "evaluate_detection_model", "online"], default="online", help="Running mode")
     parser.add_argument("--host", type=str, default="localhost", help="CARLA server host address")
     parser.add_argument("--port", type=int, default=2000, help="CARLA server port")
     parser.add_argument("--yolo-model", type=str, default="yolov8n.pt", help="Path to YOLO weights")
@@ -31,7 +36,7 @@ def main():
     logger = logging.getLogger("Main")
 
     # Initialize Perception Modality
-    if args.mode == "ensemble":
+    if args.perception_mode == "ensemble":
         perception = EnsemblePerception(
             yolo_path=args.yolo_model,
             rtdetr_path=args.rtdetr_model,
@@ -78,12 +83,27 @@ def main():
         controller.camera.listen(image_queue.put)
         spectator = controller.world.get_spectator()
 
-        logger.info("Closed-loop ADAS running in SYNC mode. Press Ctrl+C to stop.")
+        logger.info(f"Closed-loop ADAS running in {args.running_mode} mode. Press Ctrl+C to stop.")
+
+        if args.running_mode == "evaluate_distance_model":
+            controller.vehicle.set_autopilot(True)
+            evaluator = DistanceEvaluator(iou_threshold=0.5)
+            frame_count = 0
+        elif args.running_mode == "evaluate_detection_model":
+            controller.vehicle.set_autopilot(True)
 
         while True:
             controller.world.tick()
             image = image_queue.get()
-            controller.process_image(image)
+            
+            if args.running_mode == "online":
+                controller.process_image(image)
+            elif args.running_mode == "evaluate_distance_model":
+                frame_count += 1
+                controller.evaluate_distance(image, frame_count, evaluator)
+            elif args.running_mode == "evaluate_detection_model":
+                pass
+                
             spectator.set_transform(controller.get_third_person_camera_transform())
             
     except KeyboardInterrupt:
@@ -91,6 +111,9 @@ def main():
     except Exception as e:
         logger.error("An unexpected error occurred in run loop: %s", e, exc_info=True)
     finally:
+        if args.running_mode == "evaluate_distance_model" and 'evaluator' in locals():
+            logger.info("Final Evaluation Results:")
+            evaluator.evaluate()
         controller.cleanup()
 
 if __name__ == "__main__":
