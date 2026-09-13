@@ -11,3 +11,5 @@ fine-tuning/runs/rtdetr-l_detect/
 fine-tuning/runs/yolov8n_detect/
 fine-tuning/runs/ml-depth-pro/
 closed_loop/DepthAnythingV2/
+evaluation_logs/
+distance_evaluation_report.html

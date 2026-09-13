@@ -9,6 +9,7 @@ DEPTH_MODEL="DepthAnythingV2/checkpoints/depth_anything_v2_metric_hypersim_vits.
 
 python3 main.py \
     --perception_mode ensemble \
+    --running_mode evaluate_distance_model \
     --host localhost \
     --port 2000 \
     --log-level INFO \

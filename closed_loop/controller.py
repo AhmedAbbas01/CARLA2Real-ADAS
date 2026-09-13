@@ -7,6 +7,9 @@ import sys
 import os
 import json
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models_evaluation")))
+from evaluate_distance import DistanceEvaluator
+
 try:
     import carla
 except ImportError:
@@ -21,8 +24,10 @@ class ADASController:
     """
     def __init__(self, perception_module, host="localhost", port=2000,
                  cruise_throttle=0.35, warning_distance=15.0, brake_distance=7.0,
-                 lane_width=3.5, max_speed=30.0, visualize=False):
+                 lane_width=3.5, max_speed=30.0, visualize=False, running_mode="online"):
         self.perception = perception_module
+        self.evaluator = DistanceEvaluator(iou_threshold=0.5) if running_mode == "evaluate_distance_model" else None
+        self.running_mode = running_mode
         self.host = host
         self.port = port
         self.cruise_throttle = cruise_throttle
@@ -161,7 +166,7 @@ class ADASController:
         cross_z = v_vec.x * target_vec.y - v_vec.y * target_vec.x
         return float(np.clip(cross_z * 2.0, -1.0, 1.0))
 
-    def process_image(self, image):
+    def process_image(self, image, frame_count):
         try:
             array = np.frombuffer(image.raw_data, dtype=np.uint8)
             array = array.reshape((image.height, image.width, 4))
@@ -200,6 +205,9 @@ class ADASController:
             
             if self.visualize:
                 self.show_visualization(frame, detected_objects, text, color, throttle, brake, steer)
+            
+            if self.running_mode == "evaluate_distance_model":
+                self.evaluate_distance(detected_objects, frame_count)
 
         except Exception as e:
             logger.error("Error occurred during image processing: %s", e, exc_info=True)
@@ -347,33 +355,20 @@ class ADASController:
                 class_name = 'Pedestrians'
 
             gt_objects.append({
-                'bbox': [float(x_min), float(y_min), float(x_max), float(y_max)],
+                'box': [float(x_min), float(y_min), float(x_max), float(y_max)],
                 'class': class_name,
                 'distance': float(dist)
             })
             
         return gt_objects
 
-    def evaluate_distance(self, image, frame_count, evaluator):
+    def evaluate_distance(self, detected_objects, frame_count):
         try:
-            array = np.frombuffer(image.raw_data, dtype=np.uint8)
-            array = array.reshape((image.height, image.width, 4))
-            frame = array[:, :, :3].copy()
+            
+            image_w = float(self.camera.attributes["image_size_x"])
+            image_h = float(self.camera.attributes["image_size_y"])
+            fov = float(self.camera.attributes["fov"])
 
-            boxes, scores, labels, distances = self.perception.predict(frame)
-            
-            pred_objects = []
-            for box, score, label, dist in zip(boxes, scores, labels, distances):
-                if dist is not None:
-                    pred_objects.append({
-                        'bbox': [float(x) for x in box],
-                        'class': self.perception.get_class_name(label),
-                        'distance': float(dist)
-                    })
-            
-            image_w = image.width
-            image_h = image.height
-            fov = image.fov
             focal = image_w / (2.0 * np.tan(fov * np.pi / 360.0))
             K = np.identity(3)
             K[0, 0] = K[1, 1] = focal
@@ -381,25 +376,23 @@ class ADASController:
             K[1, 2] = image_h / 2.0
             
             gt_objects = self.get_gt_objects(K, image_w, image_h)
-            
-            metrics = evaluator.add_frame_predictions(gt_objects, pred_objects)
+            metrics = self.evaluator.add_frame_predictions(gt_objects, detected_objects, frame_id=frame_count)
             
             if metrics:
-                logger.info(f"Frame {frame_count:04d} | Matches: {metrics['frame_matches']} | "
-                            f"Frame MAE: {metrics['frame_mae']:.2f}m | Running MAE: {metrics['running_mae']:.2f}m")
+                logger.info(f"Frame {frame_count:04d} | Matches: {metrics['frame_matches']}/{len(detected_objects)} | "
+                            f"MAE: {metrics['frame_mae']:.2f}m | Total MAE: {metrics['running_mae']:.2f}m")
+            else:
+                logger.info(f"Frame {frame_count:04d} | No matches found for evaluation.")
             
-            log_data = {
-                "frame_id": frame_count,
-                "ground_truth": gt_objects,
-                "predictions": pred_objects
-            }
-            
-            os.makedirs("evaluation_logs", exist_ok=True)
-            with open(os.path.join("evaluation_logs", f"frame_{frame_count:04d}.json"), "w") as f:
-                json.dump(log_data, f, indent=4)
-                
         except Exception as e:
             logger.error("Error occurred during distance evaluation: %s", e, exc_info=True)
+
+    def evaluate(self):
+        """
+        Finalizes evaluation and generates the evaluation report.
+        """
+        if self.evaluator:
+            self.evaluator.evaluate()
 
     def cleanup(self):
         """

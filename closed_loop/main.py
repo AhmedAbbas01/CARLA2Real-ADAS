@@ -4,8 +4,6 @@ import sys
 import os
 import queue
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models_evaluation")))
-from evaluate_distance import DistanceEvaluator
 from perception import EnsemblePerception, SinglePerception
 from controller import ADASController
 
@@ -66,7 +64,8 @@ def main():
         brake_distance=args.brake_distance,
         lane_width=args.lane_width,
         max_speed=args.max_speed,
-        visualize=args.visualize
+        visualize=args.visualize,
+        running_mode=args.running_mode
     )
     
     try:
@@ -82,38 +81,23 @@ def main():
         image_queue = queue.Queue()
         controller.camera.listen(image_queue.put)
         spectator = controller.world.get_spectator()
-
+        frame_count = 0
         logger.info(f"Closed-loop ADAS running in {args.running_mode} mode. Press Ctrl+C to stop.")
-
-        if args.running_mode == "evaluate_distance_model":
-            controller.vehicle.set_autopilot(True)
-            evaluator = DistanceEvaluator(iou_threshold=0.5)
-            frame_count = 0
-        elif args.running_mode == "evaluate_detection_model":
-            controller.vehicle.set_autopilot(True)
 
         while True:
             controller.world.tick()
             image = image_queue.get()
-            
-            if args.running_mode == "online":
-                controller.process_image(image)
-            elif args.running_mode == "evaluate_distance_model":
-                frame_count += 1
-                controller.evaluate_distance(image, frame_count, evaluator)
-            elif args.running_mode == "evaluate_detection_model":
-                pass
-                
+            controller.process_image(image, frame_count)
             spectator.set_transform(controller.get_third_person_camera_transform())
-            
+            frame_count += 1
     except KeyboardInterrupt:
         logger.info("Interrupted by user. Stopping...")
     except Exception as e:
         logger.error("An unexpected error occurred in run loop: %s", e, exc_info=True)
     finally:
-        if args.running_mode == "evaluate_distance_model" and 'evaluator' in locals():
+        if args.running_mode == "evaluate_distance_model":
             logger.info("Final Evaluation Results:")
-            evaluator.evaluate()
+            controller.evaluate()
         controller.cleanup()
 
 if __name__ == "__main__":
