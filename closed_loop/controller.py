@@ -26,7 +26,7 @@ class ADASController:
                  cruise_throttle=0.35, warning_distance=15.0, brake_distance=7.0,
                  lane_width=3.5, max_speed=30.0, visualize=False, running_mode="online"):
         self.perception = perception_module
-        self.evaluator = DistanceEvaluator(iou_threshold=0.5) if running_mode == "evaluate_distance_model" else None
+        self.evaluator = DistanceEvaluator(center_dist_threshold=50.0) if running_mode == "evaluate_distance_model" else None
         self.running_mode = running_mode
         self.host = host
         self.port = port
@@ -103,6 +103,7 @@ class ADASController:
             class_name = self.perception.get_class_name(label)
             x1, y1, x2, y2 = box
             center_x = (x1 + x2) / 2.0
+            center_y = (y1 + y2) / 2.0
 
             lateral_distance = dist * (center_x - c_x) / focal_length
 
@@ -111,7 +112,8 @@ class ADASController:
                 "confidence": score,
                 "distance": dist,
                 "lateral_distance": lateral_distance,
-                "box": box
+                "box": box,
+                "center": [center_x, center_y]
             })
 
             if class_name not in self.danger_classes:
@@ -295,84 +297,13 @@ class ADASController:
         ego_location = camera_transform.location
         ego_forward = camera_transform.get_forward_vector()
 
-        # actors = self.world.get_actors()
-        # vehicles = actors.filter('vehicle.*')
-        # walkers = actors.filter('walker.pedestrian.*')
-        
-        # for actor in list(vehicles) + list(walkers):
-        #     if self.vehicle and actor.id == self.vehicle.id:
-        #         continue
-                
-        #     dist = actor.get_transform().location.distance(ego_location)
-        #     if dist > 50:
-        #         continue
-        #     ray = actor.get_transform().location - ego_location
-        #     if ego_forward.dot(ray) <= 0:
-        #         continue
-
-        #     try:
-        #         bb = actor.bounding_box
-        #     except AttributeError:
-        #         continue
-
-        #     verts = [v for v in bb.get_world_vertices(actor.get_transform())]
-        #     verts_2d = []
-        #     for vert in verts:
-        #         p_world = np.array([vert.x, vert.y, vert.z, 1.0])
-        #         p_camera = np.dot(w2c, p_world)
-        #         p_cam_std = [p_camera[1], -p_camera[2], p_camera[0]]
-                
-        #         if p_cam_std[2] <= 0:
-        #             continue
-                
-        #         p_img = np.dot(K, p_cam_std)
-        #         p_img[0] /= p_img[2]
-        #         p_img[1] /= p_img[2]
-        #         verts_2d.append(p_img[:2])
-                
-        #     if len(verts_2d) == 0:
-        #         continue
-                
-        #     verts_2d = np.array(verts_2d)
-        #     x_min = np.min(verts_2d[:, 0])
-        #     x_max = np.max(verts_2d[:, 0])
-        #     y_min = np.min(verts_2d[:, 1])
-        #     y_max = np.max(verts_2d[:, 1])
-            
-        #     x_min = max(0.0, min(x_min, float(image_w)))
-        #     x_max = max(0.0, min(x_max, float(image_w)))
-        #     y_min = max(0.0, min(y_min, float(image_h)))
-        #     y_max = max(0.0, min(y_max, float(image_h)))
-
-        #     if x_max <= x_min or y_max <= y_min:
-        #         continue
-
-        #     if 'vehicle' in actor.type_id:
-        #         class_name = 'Car'
-        #         if 'truck' in actor.type_id:
-        #             class_name = 'Truck'
-        #         elif 'bus' in actor.type_id:
-        #             class_name = 'Bus'
-        #         elif 'motorcycle' in actor.type_id:
-        #             class_name = 'Motorcycle'
-        #         elif 'bicycle' in actor.type_id:
-        #             class_name = 'Bicycle'
-        #     else:
-        #         class_name = 'Pedestrians'
-
-        #     gt_objects.append({
-        #         'box': [float(x_min), float(y_min), float(x_max), float(y_max)],
-        #         'class': class_name,
-        #         'distance': float(dist)
-        #     })
-            
-        # # Process static objects
+        # Process static objects
         static_labels = [carla.CityObjectLabel.Car, carla.CityObjectLabel.RailTrack, carla.CityObjectLabel.Truck, 
                          carla.CityObjectLabel.Motorcycle, carla.CityObjectLabel.Bicycle, carla.CityObjectLabel.Bus, 
                          carla.CityObjectLabel.Rider, carla.CityObjectLabel.Train, carla.CityObjectLabel.TrafficSigns,
                          carla.CityObjectLabel.TrafficLight, carla.CityObjectLabel.Pedestrians]
         
-        rendered_static_centers = set()
+        rendered_centers = []
         for label in static_labels:
             try:
                 level_bbs = self.world.get_level_bbs(label)
@@ -385,41 +316,29 @@ class ADASController:
                 ray = bb.location - ego_location
                 if ego_forward.dot(ray) <= 0:
                     continue
-                center = (round(bb.location.x, 1), round(bb.location.y, 1), round(bb.location.z, 1))
-                if center in rendered_static_centers:
-                    continue
-                rendered_static_centers.add(center)
                 
-                verts = [v for v in bb.get_world_vertices(carla.Transform())]
-                verts_2d = []
-                for vert in verts:
-                    p_world = np.array([vert.x, vert.y, vert.z, 1.0])
-                    p_camera = np.dot(w2c, p_world)
-                    p_cam_std = [p_camera[1], -p_camera[2], p_camera[0]]
-                    
-                    if p_cam_std[2] <= 0:
-                        continue
-                    
-                    p_img = np.dot(K, p_cam_std)
-                    p_img[0] /= p_img[2]
-                    p_img[1] /= p_img[2]
-                    verts_2d.append(p_img[:2])
-                    
-                if len(verts_2d) == 0:
+                # Check for duplicate meshes of the same object (within 2.0 meters)
+                is_duplicate = False
+                for prev_loc, prev_label in rendered_centers:
+                    if prev_label == label and prev_loc.distance(bb.location) < 2.0:
+                        is_duplicate = True
+                        break
+                if is_duplicate:
                     continue
-                    
-                verts_2d = np.array(verts_2d)
-                x_min = np.min(verts_2d[:, 0])
-                x_max = np.max(verts_2d[:, 0])
-                y_min = np.min(verts_2d[:, 1])
-                y_max = np.max(verts_2d[:, 1])
+                rendered_centers.append((bb.location, label))
                 
-                x_min = max(0.0, min(x_min, float(image_w)))
-                x_max = max(0.0, min(x_max, float(image_w)))
-                y_min = max(0.0, min(y_min, float(image_h)))
-                y_max = max(0.0, min(y_max, float(image_h)))
+                p_world = np.array([bb.location.x, bb.location.y, bb.location.z, 1.0])
+                p_camera = np.dot(w2c, p_world)
+                p_cam_std = [p_camera[1], -p_camera[2], p_camera[0]]
+                
+                if p_cam_std[2] <= 0:
+                    continue
+                
+                p_img = np.dot(K, p_cam_std)
+                cx = p_img[0] / p_img[2]
+                cy = p_img[1] / p_img[2]
 
-                if x_max <= x_min or y_max <= y_min:
+                if not (0 <= cx <= image_w and 0 <= cy <= image_h):
                     continue
 
                 class_name = label.name if hasattr(label, 'name') else str(label).split('.')[-1]
@@ -427,7 +346,7 @@ class ADASController:
                     class_name = 'Pedestrians'
 
                 gt_objects.append({
-                    'box': [float(x_min), float(y_min), float(x_max), float(y_max)],
+                    'center': [float(cx), float(cy)],
                     'class': class_name,
                     'distance': float(dist)
                 })
@@ -477,19 +396,25 @@ class ADASController:
         """
         annotated = frame.copy()
         
-        # Draw Ground Truth objects (Blue)
+        # Draw Ground Truth objects (Green)
         for gt in gt_objects:
-            x1, y1, x2, y2 = map(int, gt['box'])
+            if gt['class'] not in self.danger_classes:
+                continue
+
+            cx, cy = map(int, gt['center'])
             label = f"GT {gt['class']}: {gt['distance']:.1f}m"
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (255, 0, 0), 2)
-            cv2.putText(annotated, label, (x1, max(y1 - 5, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+            cv2.circle(annotated, (cx, cy), 6, (0, 255, 0), -1)
+            cv2.putText(annotated, label, (cx + 10, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         # Draw Detected objects (Yellow)
         for obj in detected_objects:
-            x1, y1, x2, y2 = map(int, obj['box'])
+            if obj['class'] not in self.danger_classes:
+                continue
+
+            cx, cy = map(int, obj['center'])
             label = f"Pred {obj['class']}: {obj['distance']:.1f}m"
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 255), 2)
-            cv2.putText(annotated, label, (x1, y2 + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+            cv2.circle(annotated, (cx, cy), 6, (0, 255, 255), -1)
+            cv2.putText(annotated, label, (cx + 10, cy + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
         # Display Metrics
         if metrics:

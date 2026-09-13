@@ -12,73 +12,41 @@ class DistanceEvaluator:
     """!
     @brief A class to evaluate distance estimation accuracy for detected objects.
     
-    This class matches ground-truth and predicted objects using Intersection over Union (IoU) 
-    and computes distance error metrics such as MAE, RMSE, and Relative Error.
+    This class matches ground-truth and predicted objects using center point distance 
+    and computes distance error metrics such as MAE, RMSE, and Relative Error. Focuses purely on depth behavior.
     """
 
-    def __init__(self, iou_threshold: float = 0.5):
+    def __init__(self, center_dist_threshold: float = 50.0):
         """!
         @brief Initializes the DistanceEvaluator.
         
-        @param iou_threshold The minimum IoU required to match a prediction to a ground-truth object.
+        @param center_dist_threshold The maximum pixel distance between centers to match a prediction to a ground-truth object.
         """
-        self.iou_threshold = iou_threshold
+        self.center_dist_threshold = center_dist_threshold
         self.records = []
         self.running_abs_error = 0.0
         self.running_matches = 0
 
     @staticmethod
-    def compute_iou(box1: List[float], box2: List[float]) -> float:
+    def compute_center_distance(center1: List[float], center2: List[float]) -> float:
         """!
-        @brief Computes Intersection over Union (IoU) between two 2D bounding boxes.
+        @brief Computes the Euclidean distance between two center points.
         
-        @param box1 The first bounding box [xmin, ymin, xmax, ymax].
-        @param box2 The second bounding box [xmin, ymin, xmax, ymax].
-        @return The IoU score (float) between the two bounding boxes.
+        @param center1 The first center point [cx, cy].
+        @param center2 The second center point [cx, cy].
+        @return The pixel distance between the centers (float).
         """
-        # Determine the coordinates of the intersection rectangle
-        x1 = max(box1[0], box2[0])
-        y1 = max(box1[1], box2[1])
-        x2 = min(box1[2], box2[2])
-        y2 = min(box1[3], box2[3])
-
-        # Compute the area of intersection rectangle
-        intersection = max(0, x2 - x1) * max(0, y2 - y1)
-        # Compute the area of both bounding boxes
-        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
-        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
-        # Compute the union
-        union = area1 + area2 - intersection
-
-        # Return the IoU score
-        return intersection / union if union > 0 else 0.0
-
-    @staticmethod
-    def compute_center_distance(box1: List[float], box2: List[float]) -> float:
-        """!
-        @brief Computes the normalized Euclidean distance between the centers of two bounding boxes.
+        cx1, cy1 = center1[0], center1[1]
+        cx2, cy2 = center2[0], center2[1]
         
-        @param box1 The first bounding box [xmin, ymin, xmax, ymax].
-        @param box2 The second bounding box [xmin, ymin, xmax, ymax].
-        @return The normalized distance between the centers (float).
-        """
-        cx1, cy1 = (box1[0] + box1[2]) / 2.0, (box1[1] + box1[3]) / 2.0
-        cx2, cy2 = (box2[0] + box2[2]) / 2.0, (box2[1] + box2[3]) / 2.0
-        
-        center_dist = np.sqrt((cx1 - cx2) ** 2 + (cy1 - cy2) ** 2)
-        
-        # Diagonal of the enclosing bounding box
-        diag = np.sqrt((max(box1[2], box2[2]) - min(box1[0], box2[0])) ** 2 + 
-                       (max(box1[3], box2[3]) - min(box1[1], box2[1])) ** 2)
-        
-        return center_dist / diag if diag > 0 else 0.0
+        return float(np.sqrt((cx1 - cx2) ** 2 + (cy1 - cy2) ** 2))
 
     def add_frame_predictions(self, gt_objects: List[Dict], pred_objects: List[Dict], frame_id: int = None, log_dir: str = "evaluation_logs") -> Dict:
         """!
         @brief Matches predicted objects to ground-truth objects for a single frame and records the distance errors.
         
-        @param gt_objects A list of ground-truth object dictionaries: [{'box': [x1,y1,x2,y2], 'class': 'Car', 'distance': 12.4}, ...]
-        @param pred_objects A list of predicted object dictionaries: [{'box': [x1,y1,x2,y2], 'class': 'Car', 'distance': 12.1}, ...]
+        @param gt_objects A list of ground-truth object dictionaries: [{'center': [cx, cy], 'class': 'Car', 'distance': 12.4}, ...]
+        @param pred_objects A list of predicted object dictionaries: [{'center': [cx, cy], 'class': 'Car', 'distance': 12.1}, ...]
         @param frame_id An optional frame identifier to save the frame results to a JSON file.
         @param log_dir The directory where JSON logs should be saved if frame_id is provided.
         @return A dictionary containing the frame MAE, running MAE, and the number of matches in the frame, or None if no matches found.
@@ -94,20 +62,17 @@ class DistanceEvaluator:
             for i, pred in enumerate(pred_objects):
                 for j, gt in enumerate(gt_objects):
                     if pred['class'] == gt['class']:
-                        iou = self.compute_iou(pred['box'], gt['box'])
-                        if iou >= self.iou_threshold:
-                            # Incorporate both IoU and normalized center distance into the cost
-                            norm_center_dist = self.compute_center_distance(pred['box'], gt['box'])
-                            cost_matrix[i, j] = 0.8 * (1.0 - iou) + 0.2 * norm_center_dist
+                        center_dist = self.compute_center_distance(pred['center'], gt['center'])
+                        if center_dist <= self.center_dist_threshold:
+                            cost_matrix[i, j] = center_dist
 
             # Apply the Hungarian algorithm (linear sum assignment)
             row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
             for i, j in zip(row_ind, col_ind):
-                if cost_matrix[i, j] <= 1.0:  # Check if it's a valid match (IoU >= threshold)
+                if cost_matrix[i, j] <= self.center_dist_threshold:  # Check if it's a valid match
                     pred = pred_objects[i]
                     gt_match = gt_objects[j]
-
                     gt_dist = gt_match['distance']
                     pred_dist = pred['distance']
                     err = pred_dist - gt_dist
