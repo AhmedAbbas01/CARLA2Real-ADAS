@@ -203,11 +203,14 @@ class ADASController:
 
             logger.info(f"{text} | Throttle: {throttle:.2f}  Brake: {brake:.2f}  Steer: {steer:.2f}")
             
-            if self.visualize:
+            if self.running_mode == "evaluate_distance_model":
+                gt_objects, metrics = self.evaluate_distance(detected_objects, frame_count)
+
+            if self.visualize and self.running_mode == "online":
                 self.show_visualization(frame, detected_objects, text, color, throttle, brake, steer)
             
-            if self.running_mode == "evaluate_distance_model":
-                self.evaluate_distance(detected_objects, frame_count)
+            elif self.visualize and self.running_mode == "evaluate_distance_model":
+                self.show_evaluation_visualization(frame, gt_objects, detected_objects, metrics, text, color, throttle, brake, steer)
 
         except Exception as e:
             logger.error("Error occurred during image processing: %s", e, exc_info=True)
@@ -245,19 +248,22 @@ class ADASController:
             cv2.rectangle(annotated, (x1, y1 - text_h - baseline - 5), (x1 + text_w, y1), (0, 255, 0), -1)
             cv2.putText(annotated, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
-        cv2.putText(annotated, text, (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 3)
+        self._draw_driving_decision(annotated, text, color, throttle, brake, steer)
+
+        cv2.imshow("YOLO Closed-Loop ADAS", annotated)
+        cv2.waitKey(1)
+
+    def _draw_driving_decision(self, annotated, text, color, throttle, brake, steer):
+        cv2.putText(annotated, text, (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 3)
         cv2.putText(
             annotated,
             f"Throttle: {throttle:.2f}  Brake: {brake:.2f}  Steer: {steer:.2f}",
-            (40, 110),
+            (40, 120),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.9,
             (255, 255, 255),
             2
         )
-
-        cv2.imshow("YOLO Closed-Loop ADAS", annotated)
-        cv2.waitKey(1)
 
     def get_third_person_camera_transform(self):
         import math
@@ -289,77 +295,143 @@ class ADASController:
         ego_location = camera_transform.location
         ego_forward = camera_transform.get_forward_vector()
 
-        actors = self.world.get_actors()
-        vehicles = actors.filter('vehicle.*')
-        walkers = actors.filter('walker.pedestrian.*')
+        # actors = self.world.get_actors()
+        # vehicles = actors.filter('vehicle.*')
+        # walkers = actors.filter('walker.pedestrian.*')
         
-        for actor in list(vehicles) + list(walkers):
-            if self.vehicle and actor.id == self.vehicle.id:
-                continue
+        # for actor in list(vehicles) + list(walkers):
+        #     if self.vehicle and actor.id == self.vehicle.id:
+        #         continue
                 
-            dist = actor.get_transform().location.distance(ego_location)
-            if dist > 50:
-                continue
-            ray = actor.get_transform().location - ego_location
-            if ego_forward.dot(ray) <= 0:
-                continue
+        #     dist = actor.get_transform().location.distance(ego_location)
+        #     if dist > 50:
+        #         continue
+        #     ray = actor.get_transform().location - ego_location
+        #     if ego_forward.dot(ray) <= 0:
+        #         continue
 
+        #     try:
+        #         bb = actor.bounding_box
+        #     except AttributeError:
+        #         continue
+
+        #     verts = [v for v in bb.get_world_vertices(actor.get_transform())]
+        #     verts_2d = []
+        #     for vert in verts:
+        #         p_world = np.array([vert.x, vert.y, vert.z, 1.0])
+        #         p_camera = np.dot(w2c, p_world)
+        #         p_cam_std = [p_camera[1], -p_camera[2], p_camera[0]]
+                
+        #         if p_cam_std[2] <= 0:
+        #             continue
+                
+        #         p_img = np.dot(K, p_cam_std)
+        #         p_img[0] /= p_img[2]
+        #         p_img[1] /= p_img[2]
+        #         verts_2d.append(p_img[:2])
+                
+        #     if len(verts_2d) == 0:
+        #         continue
+                
+        #     verts_2d = np.array(verts_2d)
+        #     x_min = np.min(verts_2d[:, 0])
+        #     x_max = np.max(verts_2d[:, 0])
+        #     y_min = np.min(verts_2d[:, 1])
+        #     y_max = np.max(verts_2d[:, 1])
+            
+        #     x_min = max(0.0, min(x_min, float(image_w)))
+        #     x_max = max(0.0, min(x_max, float(image_w)))
+        #     y_min = max(0.0, min(y_min, float(image_h)))
+        #     y_max = max(0.0, min(y_max, float(image_h)))
+
+        #     if x_max <= x_min or y_max <= y_min:
+        #         continue
+
+        #     if 'vehicle' in actor.type_id:
+        #         class_name = 'Car'
+        #         if 'truck' in actor.type_id:
+        #             class_name = 'Truck'
+        #         elif 'bus' in actor.type_id:
+        #             class_name = 'Bus'
+        #         elif 'motorcycle' in actor.type_id:
+        #             class_name = 'Motorcycle'
+        #         elif 'bicycle' in actor.type_id:
+        #             class_name = 'Bicycle'
+        #     else:
+        #         class_name = 'Pedestrians'
+
+        #     gt_objects.append({
+        #         'box': [float(x_min), float(y_min), float(x_max), float(y_max)],
+        #         'class': class_name,
+        #         'distance': float(dist)
+        #     })
+            
+        # # Process static objects
+        static_labels = [carla.CityObjectLabel.Car, carla.CityObjectLabel.RailTrack, carla.CityObjectLabel.Truck, 
+                         carla.CityObjectLabel.Motorcycle, carla.CityObjectLabel.Bicycle, carla.CityObjectLabel.Bus, 
+                         carla.CityObjectLabel.Rider, carla.CityObjectLabel.Train, carla.CityObjectLabel.TrafficSigns,
+                         carla.CityObjectLabel.TrafficLight, carla.CityObjectLabel.Pedestrians]
+        
+        rendered_static_centers = set()
+        for label in static_labels:
             try:
-                bb = actor.bounding_box
-            except AttributeError:
-                continue
-
-            verts = [v for v in bb.get_world_vertices(actor.get_transform())]
-            verts_2d = []
-            for vert in verts:
-                p_world = np.array([vert.x, vert.y, vert.z, 1.0])
-                p_camera = np.dot(w2c, p_world)
-                p_cam_std = [p_camera[1], -p_camera[2], p_camera[0]]
-                
-                if p_cam_std[2] <= 0:
+                level_bbs = self.world.get_level_bbs(label)
+            except Exception:
+                level_bbs = []
+            for bb in level_bbs:
+                dist = bb.location.distance(ego_location)
+                if dist > 50:
                     continue
+                ray = bb.location - ego_location
+                if ego_forward.dot(ray) <= 0:
+                    continue
+                center = (round(bb.location.x, 1), round(bb.location.y, 1), round(bb.location.z, 1))
+                if center in rendered_static_centers:
+                    continue
+                rendered_static_centers.add(center)
                 
-                p_img = np.dot(K, p_cam_std)
-                p_img[0] /= p_img[2]
-                p_img[1] /= p_img[2]
-                verts_2d.append(p_img[:2])
+                verts = [v for v in bb.get_world_vertices(carla.Transform())]
+                verts_2d = []
+                for vert in verts:
+                    p_world = np.array([vert.x, vert.y, vert.z, 1.0])
+                    p_camera = np.dot(w2c, p_world)
+                    p_cam_std = [p_camera[1], -p_camera[2], p_camera[0]]
+                    
+                    if p_cam_std[2] <= 0:
+                        continue
+                    
+                    p_img = np.dot(K, p_cam_std)
+                    p_img[0] /= p_img[2]
+                    p_img[1] /= p_img[2]
+                    verts_2d.append(p_img[:2])
+                    
+                if len(verts_2d) == 0:
+                    continue
+                    
+                verts_2d = np.array(verts_2d)
+                x_min = np.min(verts_2d[:, 0])
+                x_max = np.max(verts_2d[:, 0])
+                y_min = np.min(verts_2d[:, 1])
+                y_max = np.max(verts_2d[:, 1])
                 
-            if len(verts_2d) == 0:
-                continue
-                
-            verts_2d = np.array(verts_2d)
-            x_min = np.min(verts_2d[:, 0])
-            x_max = np.max(verts_2d[:, 0])
-            y_min = np.min(verts_2d[:, 1])
-            y_max = np.max(verts_2d[:, 1])
-            
-            x_min = max(0.0, min(x_min, float(image_w)))
-            x_max = max(0.0, min(x_max, float(image_w)))
-            y_min = max(0.0, min(y_min, float(image_h)))
-            y_max = max(0.0, min(y_max, float(image_h)))
+                x_min = max(0.0, min(x_min, float(image_w)))
+                x_max = max(0.0, min(x_max, float(image_w)))
+                y_min = max(0.0, min(y_min, float(image_h)))
+                y_max = max(0.0, min(y_max, float(image_h)))
 
-            if x_max <= x_min or y_max <= y_min:
-                continue
+                if x_max <= x_min or y_max <= y_min:
+                    continue
 
-            if 'vehicle' in actor.type_id:
-                class_name = 'Car'
-                if 'truck' in actor.type_id:
-                    class_name = 'Truck'
-                elif 'bus' in actor.type_id:
-                    class_name = 'Bus'
-                elif 'motorcycle' in actor.type_id:
-                    class_name = 'Motorcycle'
-                elif 'bicycle' in actor.type_id:
-                    class_name = 'Bicycle'
-            else:
-                class_name = 'Pedestrians'
+                class_name = label.name if hasattr(label, 'name') else str(label).split('.')[-1]
+                if class_name == 'Rider':
+                    class_name = 'Pedestrians'
 
-            gt_objects.append({
-                'box': [float(x_min), float(y_min), float(x_max), float(y_max)],
-                'class': class_name,
-                'distance': float(dist)
-            })
-            
+                gt_objects.append({
+                    'box': [float(x_min), float(y_min), float(x_max), float(y_max)],
+                    'class': class_name,
+                    'distance': float(dist)
+                })
+
         return gt_objects
 
     def evaluate_distance(self, detected_objects, frame_count):
@@ -383,10 +455,55 @@ class ADASController:
                             f"MAE: {metrics['frame_mae']:.2f}m | Total MAE: {metrics['running_mae']:.2f}m")
             else:
                 logger.info(f"Frame {frame_count:04d} | No matches found for evaluation.")
-            
+
+            return gt_objects, metrics
         except Exception as e:
             logger.error("Error occurred during distance evaluation: %s", e, exc_info=True)
+            return [], None
 
+    def show_evaluation_visualization(self, frame, gt_objects, detected_objects, metrics, text_decision, color, throttle, brake, steer):
+        """
+        Annotates the frame with ground-truth and detected objects for evaluation comparison.
+        
+        :param frame: The current RGB image frame.
+        :param gt_objects: List of ground-truth objects.
+        :param detected_objects: List of detected predicted objects.
+        :param metrics: Evaluation metrics dictionary for the current frame.
+        :param text_decision: text representing the danger level.
+        :param color: color to show the danger level.
+        :param throttle: Current throttle value.
+        :param brake: Current brake value.
+        :param steer: Current steer value.
+        """
+        annotated = frame.copy()
+        
+        # Draw Ground Truth objects (Blue)
+        for gt in gt_objects:
+            x1, y1, x2, y2 = map(int, gt['box'])
+            label = f"GT {gt['class']}: {gt['distance']:.1f}m"
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            cv2.putText(annotated, label, (x1, max(y1 - 5, 0)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+
+        # Draw Detected objects (Yellow)
+        for obj in detected_objects:
+            x1, y1, x2, y2 = map(int, obj['box'])
+            label = f"Pred {obj['class']}: {obj['distance']:.1f}m"
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 255), 2)
+            cv2.putText(annotated, label, (x1, y2 + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+        # Display Metrics
+        if metrics:
+            text = f"Matches: {metrics['frame_matches']} | Frame MAE: {metrics['frame_mae']:.2f}m"
+        else:
+            text = "Matches: 0 | Frame MAE: N/A"
+            
+        cv2.putText(annotated, text, (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+
+        self._draw_driving_decision(annotated, text_decision, color, throttle, brake, steer)
+
+        cv2.imshow("Distance Evaluation", annotated)
+        cv2.waitKey(1)
+ 
     def evaluate(self):
         """
         Finalizes evaluation and generates the evaluation report.
