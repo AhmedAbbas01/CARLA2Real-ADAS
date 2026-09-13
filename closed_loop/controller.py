@@ -292,64 +292,131 @@ class ADASController:
 
     def get_gt_objects(self, K, image_w, image_h):
         gt_objects = []
+        seen_objects = set()
         camera_transform = self.camera.get_transform()
         w2c = np.array(camera_transform.get_inverse_matrix())
         ego_location = camera_transform.location
         ego_forward = camera_transform.get_forward_vector()
 
-        # Process static objects
-        static_labels = [carla.CityObjectLabel.Car, carla.CityObjectLabel.RailTrack, carla.CityObjectLabel.Truck, 
-                         carla.CityObjectLabel.Motorcycle, carla.CityObjectLabel.Bicycle, carla.CityObjectLabel.Bus, 
-                         carla.CityObjectLabel.Rider, carla.CityObjectLabel.Train, carla.CityObjectLabel.TrafficSigns,
-                         carla.CityObjectLabel.TrafficLight, carla.CityObjectLabel.Pedestrians]
-        
-        rendered_centers = []
-        for label in static_labels:
-            try:
-                level_bbs = self.world.get_level_bbs(label)
-            except Exception:
-                level_bbs = []
-            for bb in level_bbs:
-                dist = bb.location.distance(ego_location)
-                if dist > 50:
+        def project_3d_to_2d(vertices):
+            verts_2d = []
+            for v in vertices:
+                p_world = np.array([v.x, v.y, v.z, 1.0])
+                p_camera = np.dot(w2c, p_world)
+                if p_camera[0] <= 0.0:
                     continue
-                ray = bb.location - ego_location
+                p_cam_std = np.array([p_camera[1], -p_camera[2], p_camera[0]])
+                p_img = np.dot(K, p_cam_std)
+                if p_img[2] > 0:
+                    cx = p_img[0] / p_img[2]
+                    cy = p_img[1] / p_img[2]
+                    verts_2d.append([cx, cy])
+            return verts_2d
+
+        # 1. Dynamic Objects (Actors)
+        for actor in self.world.get_actors().filter('*'):
+            if self.vehicle and actor.id == self.vehicle.id:
+                continue
+
+            type_id = actor.type_id
+            if type_id.startswith('vehicle'):
+                if type_id.startswith('vehicle.truck'):
+                    class_name = 'Truck'
+                elif type_id.startswith('vehicle.bus') or type_id.startswith('vehicle.volkswagen'):
+                    class_name = 'Bus'
+                elif type_id.startswith('vehicle.yamaha') or type_id.startswith('vehicle.kawasaki') or type_id.startswith('vehicle.harley-davidson'):
+                    class_name = 'Motorcycle'
+                elif type_id.startswith('vehicle.bh') or type_id.startswith('vehicle.diamondback') or type_id.startswith('vehicle.gazelle'):
+                    class_name = 'Bicycle'
+                else:
+                    class_name = 'Car'
+            elif type_id.startswith('walker.pedestrian'):
+                class_name = 'Pedestrians'
+            else:
+                continue
+
+            dist = actor.get_transform().location.distance(ego_location)
+            if dist > 50.0 or dist < 0.1:
+                continue
+
+            ray = actor.get_transform().location - ego_location
+            if ego_forward.dot(ray) <= 0:
+                continue
+
+            if hasattr(actor, 'bounding_box'):
+                verts = actor.bounding_box.get_world_vertices(actor.get_transform())
+                verts_2d = project_3d_to_2d(verts)
+                if not verts_2d:
+                    continue
+                verts_2d = np.array(verts_2d)
+                x_min, x_max = np.min(verts_2d[:, 0]), np.max(verts_2d[:, 0])
+                y_min, y_max = np.min(verts_2d[:, 1]), np.max(verts_2d[:, 1])
+
+                if x_max < 0 or x_min > image_w or y_max < 0 or y_min > image_h:
+                    continue
+
+                cx = (x_min + x_max) / 2.0
+                cy = (y_min + y_max) / 2.0
+                
+                obj_key = (dist, class_name)
+                if obj_key not in seen_objects:
+                    seen_objects.add(obj_key)
+                    gt_objects.append({'center': [float(cx), float(cy)], 'class': class_name, 'distance': float(dist)})
+
+        # 2. Static Objects (Environment Objects)
+        # Map target classes to CARLA CityObjectLabel enums
+        TARGET_CLASSES = {
+            "Car": carla.CityObjectLabel.Car,
+            "Truck": carla.CityObjectLabel.Truck,
+            "Bus": carla.CityObjectLabel.Bus,
+            "Motorcycle": carla.CityObjectLabel.Motorcycle,
+            "Bicycle": carla.CityObjectLabel.Bicycle,
+            "Pedestrians": carla.CityObjectLabel.Pedestrians,
+        }
+
+        identity_transform = carla.Transform()  # Identity transform for world-space boxes
+
+        # 1. Fetch filtered static environment objects
+        for class_name, label in TARGET_CLASSES.items():
+            env_objects = self.world.get_environment_objects(label)
+            
+            for obj in env_objects:
+                # Distance calculation relative to ego vehicle
+                dist = obj.transform.location.distance(ego_location)
+                if dist > 50.0 or dist < 0.1:
+                    continue
+
+                ray = obj.transform.location - ego_location
                 if ego_forward.dot(ray) <= 0:
                     continue
                 
-                # Check for duplicate meshes of the same object (within 2.0 meters)
-                is_duplicate = False
-                for prev_loc, prev_label in rendered_centers:
-                    if prev_label == label and prev_loc.distance(bb.location) < 2.0:
-                        is_duplicate = True
-                        break
-                if is_duplicate:
+                # 2. Extract 3D vertices (EnvironmentObject bounding boxes are in world coordinates)
+                verts = obj.bounding_box.get_world_vertices(identity_transform)
+                
+                # 3. Project to 2D image plane
+                verts_2d = project_3d_to_2d(verts)
+                if not verts_2d:
                     continue
-                rendered_centers.append((bb.location, label))
-                
-                p_world = np.array([bb.location.x, bb.location.y, bb.location.z, 1.0])
-                p_camera = np.dot(w2c, p_world)
-                p_cam_std = [p_camera[1], -p_camera[2], p_camera[0]]
-                
-                if p_cam_std[2] <= 0:
-                    continue
-                
-                p_img = np.dot(K, p_cam_std)
-                cx = p_img[0] / p_img[2]
-                cy = p_img[1] / p_img[2]
+                    
+                verts_2d = np.array(verts_2d)
+                x_min, x_max = np.min(verts_2d[:, 0]), np.max(verts_2d[:, 0])
+                y_min, y_max = np.min(verts_2d[:, 1]), np.max(verts_2d[:, 1])
 
-                if not (0 <= cx <= image_w and 0 <= cy <= image_h):
+                # 4. Filter out-of-bounds bounding boxes
+                if x_max < 0 or x_min > image_w or y_max < 0 or y_min > image_h:
                     continue
 
-                class_name = label.name if hasattr(label, 'name') else str(label).split('.')[-1]
-                if class_name == 'Rider':
-                    class_name = 'Pedestrians'
-
-                gt_objects.append({
-                    'center': [float(cx), float(cy)],
-                    'class': class_name,
-                    'distance': float(dist)
-                })
+                cx = (x_min + x_max) / 2.0
+                cy = (y_min + y_max) / 2.0
+                
+                obj_key = (dist, class_name)
+                if obj_key not in seen_objects:
+                    seen_objects.add(obj_key)
+                    gt_objects.append({
+                        'center': [float(cx), float(cy)],
+                        'class': class_name,
+                        'distance': float(dist)
+                    })
 
         return gt_objects
 
