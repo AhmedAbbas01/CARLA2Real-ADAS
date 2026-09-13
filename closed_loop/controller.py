@@ -438,7 +438,7 @@ class ADASController:
             
             if metrics:
                 logger.info(f"Frame {frame_count:04d} | Matches: {metrics['frame_matches']}/{len(detected_objects)} | "
-                            f"MAE: {metrics['frame_mae']:.2f}m | Total MAE: {metrics['running_mae']:.2f}m")
+                            f"MAE: {metrics['frame_mae']:.2f}m | Total Rel Err: {metrics['running_rel_error'] * 100:.2f}%")
             else:
                 logger.info(f"Frame {frame_count:04d} | No matches found for evaluation.")
 

@@ -26,6 +26,7 @@ class DistanceEvaluator:
         self.records = []
         self.running_abs_error = 0.0
         self.running_matches = 0
+        self.running_rel_error = 0.0
 
     @staticmethod
     def compute_center_distance(center1: List[float], center2: List[float]) -> float:
@@ -53,6 +54,7 @@ class DistanceEvaluator:
         """
         frame_abs_error = 0.0
         frame_matches = 0
+        frame_rel_error = 0.0
 
         if len(gt_objects) > 0 and len(pred_objects) > 0:
             # Create a cost matrix for the Hungarian algorithm
@@ -77,6 +79,7 @@ class DistanceEvaluator:
                     pred_dist = pred['distance']
                     err = pred_dist - gt_dist
                     abs_err = abs(err)
+                    rel_err = abs_err / gt_dist if gt_dist > 0 else 0
 
                     # Classify into distance range bins
                     if gt_dist <= 10.0:
@@ -93,14 +96,16 @@ class DistanceEvaluator:
                         'pred_distance': pred_dist,
                         'abs_error': abs_err,
                         'sq_error': err ** 2,
-                        'rel_error': abs_err / gt_dist if gt_dist > 0 else 0,
+                        'rel_error': rel_err,
                         'dist_range': dist_range
                     })
                     
                     # Update running totals
                     self.running_abs_error += abs_err
+                    self.running_rel_error += rel_err
                     self.running_matches += 1
                     frame_abs_error += abs_err
+                    frame_rel_error += rel_err
                     frame_matches += 1
             
         metrics = None
@@ -108,6 +113,8 @@ class DistanceEvaluator:
             metrics = {
                 'frame_mae': frame_abs_error / frame_matches,
                 'running_mae': self.running_abs_error / self.running_matches,
+                'frame_rel_error': frame_rel_error / frame_matches,
+                'running_rel_error': self.running_rel_error / self.running_matches,
                 'frame_matches': frame_matches
             }
 
