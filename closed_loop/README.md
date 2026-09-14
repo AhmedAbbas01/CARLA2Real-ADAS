@@ -13,7 +13,7 @@ The closed-loop system is modularized into several components to separate concer
 
 ## Prerequisites
 
-Ensure you have the required weights downloaded and placed in the appropriate directories prior to execution. Depending on your mode (`single` or `ensemble`), you will need:
+Ensure you have the required weights downloaded and placed in the appropriate directories prior to execution. Depending on your perception mode (`single` or `ensemble`), you will need:
 - YOLOv8 (`.pt`)
 - RT-DETR (`.pt`)
 - Faster R-CNN (`.pth`)
@@ -34,7 +34,8 @@ You can execute the simulation using the provided shell script, which cleanly ex
 
 | Argument | Default | Description |
 |---|---|---|
-| `--mode` | `ensemble` | Set the perception pipeline (`single` or `ensemble`). |
+| `--perception_mode` | `ensemble` | Set the perception pipeline (`single` or `ensemble`). |
+| `--running_mode` | `online` | Set the running mode (`evaluate_distance_model`, `evaluate_detection_model`, or `online`). |
 | `--cruise-throttle` | `0.35` | Safe cruising throttle value when no obstacles are present. |
 | `--warning-distance` | `15.0` | Distance threshold (meters) to trigger deceleration. |
 | `--brake-distance` | `7.0` | Distance threshold (meters) to trigger emergency braking. |

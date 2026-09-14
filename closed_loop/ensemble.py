@@ -50,6 +50,7 @@ def load_models(yolo_weights_path, rtdetr_weights_path, faster_rcnn_weights_path
         try:
             logger.info(f"Loading YOLO model from {yolo_weights_path}...")
             yolo_model = YOLO(yolo_weights_path)
+            yolo_model.to(device).eval()
         except Exception as e:
             logger.error(f"Failed to load YOLO model: {e}")
 
@@ -57,6 +58,7 @@ def load_models(yolo_weights_path, rtdetr_weights_path, faster_rcnn_weights_path
         try:
             logger.info(f"Loading RT-DETR model from {rtdetr_weights_path}...")
             rtdetr_model = RTDETR(rtdetr_weights_path)
+            rtdetr_model.to(device).eval()
         except Exception as e:
             logger.error(f"Failed to load RT-DETR model: {e}")
 
@@ -64,8 +66,7 @@ def load_models(yolo_weights_path, rtdetr_weights_path, faster_rcnn_weights_path
         try:
             logger.info(f"Loading Faster R-CNN model from {faster_rcnn_weights_path} with {num_classes} classes...")
             faster_rcnn_model = fasterrcnn_resnet50_fpn(num_classes=num_classes)
-            checkpoint = torch.load(faster_rcnn_weights_path, map_location=device)
-            faster_rcnn_model.load_state_dict(checkpoint)
+            faster_rcnn_model.load_state_dict(torch.load(faster_rcnn_weights_path, map_location=device))
             faster_rcnn_model.to(device).eval()
         except Exception as e:
             logger.error(f"Failed to load Faster R-CNN model: {e}")

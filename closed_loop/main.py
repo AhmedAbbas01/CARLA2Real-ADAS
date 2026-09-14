@@ -1,14 +1,17 @@
 import argparse
 import logging
 import sys
+import os
 import queue
+
 from perception import EnsemblePerception, SinglePerception
 from controller import ADASController
 
 
 def main():
     parser = argparse.ArgumentParser(description="Closed-Loop ADAS script for CARLA.")
-    parser.add_argument("--mode", type=str, choices=["single", "ensemble"], default="ensemble", help="Perception mode")
+    parser.add_argument("--perception_mode", type=str, choices=["single", "ensemble"], default="ensemble", help="Perception mode")
+    parser.add_argument("--running_mode", type=str, choices=["evaluate_distance_model", "evaluate_detection_model", "online"], default="online", help="Running mode")
     parser.add_argument("--host", type=str, default="localhost", help="CARLA server host address")
     parser.add_argument("--port", type=int, default=2000, help="CARLA server port")
     parser.add_argument("--yolo-model", type=str, default="yolov8n.pt", help="Path to YOLO weights")
@@ -31,7 +34,7 @@ def main():
     logger = logging.getLogger("Main")
 
     # Initialize Perception Modality
-    if args.mode == "ensemble":
+    if args.perception_mode == "ensemble":
         perception = EnsemblePerception(
             yolo_path=args.yolo_model,
             rtdetr_path=args.rtdetr_model,
@@ -61,7 +64,8 @@ def main():
         brake_distance=args.brake_distance,
         lane_width=args.lane_width,
         max_speed=args.max_speed,
-        visualize=args.visualize
+        visualize=args.visualize,
+        running_mode=args.running_mode
     )
     
     try:
@@ -77,20 +81,23 @@ def main():
         image_queue = queue.Queue()
         controller.camera.listen(image_queue.put)
         spectator = controller.world.get_spectator()
-
-        logger.info("Closed-loop ADAS running in SYNC mode. Press Ctrl+C to stop.")
+        frame_count = 0
+        logger.info(f"Closed-loop ADAS running in {args.running_mode} mode. Press Ctrl+C to stop.")
 
         while True:
             controller.world.tick()
             image = image_queue.get()
-            controller.process_image(image)
+            controller.process_image(image, frame_count)
             spectator.set_transform(controller.get_third_person_camera_transform())
-            
+            frame_count += 1
     except KeyboardInterrupt:
         logger.info("Interrupted by user. Stopping...")
     except Exception as e:
         logger.error("An unexpected error occurred in run loop: %s", e, exc_info=True)
     finally:
+        if args.running_mode == "evaluate_distance_model":
+            logger.info("Final Evaluation Results:")
+            controller.evaluate()
         controller.cleanup()
 
 if __name__ == "__main__":
